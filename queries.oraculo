@@ -1,0 +1,273 @@
+select M.ScheduleAt, M.Id,
+ (select Name from Countries where Id = M.HomeTeam) as HomeTeam,
+ M.HomeTeamGoals, M.AwayTeamGoals, 
+ (select Name from Countries where Id = M.AwayTeam) as AawayTeam,
+ P.Home, P.Away, P.CreatedAt
+from Predictions P, Matches M
+where P.MatchId = M.Id
+    and P.SeerId = 3
+    and P.Home == M.HomeTeamGoals
+    and P.Away == M.AwayTeamGoals;
+    
+select M.Id, M.HomeTeam, M.HomeTeamGoals, M.AwayTeamGoals, M.AwayTeam, P.Home, P.Away
+from Predictions P, Matches M
+where P.MatchId = M.Id
+    and P.SeerId = 2;
+    
+select * from Matches where Id in (73,74,75,76);
+
+select * from predictions where seerId = 7 and matchId > 72;
+update predictions set home = 1, away = 2, createdat = '2026-06-28 15:03:01' where MatchId = 73 and SeerId = 8;
+update predictions set home = 2, away = 1, createdat = '2026-06-29 12:25:46' where MatchId = 74 and SeerId = 8;
+update predictions set home = 3, away = 0, createdat = '2026-06-29 12:25:46' where MatchId = 75 and SeerId = 8;
+update predictions set home = 2, away = 2, createdat = '2026-06-29 12:25:46' where MatchId = 76 and SeerId = 8;
+
+update predictions set home = 1, away = 2, createdat = '2026-06-28 15:09:52' where MatchId = 73 and SeerId = 7;
+update predictions set home = 2, away = 1, createdat = '2026-06-29 12:26:46' where MatchId = 74 and SeerId = 7;
+update predictions set home = 1, away = 0, createdat = '2026-06-29 12:26:46' where MatchId = 75 and SeerId = 7;
+update predictions set home = 2, away = 2, createdat = '2026-06-29 12:26:46' where MatchId = 76 and SeerId = 7;
+
+update predictions set home = 1, away = 2, createdat = '2026-06-28 15:09:52' where MatchId = 73 and SeerId = 6;
+update predictions set home = 3, away = 1, createdat = '2026-06-29 13:00:02' where MatchId = 74 and SeerId = 6;
+update predictions set home = 3, away = 1, createdat = '2026-06-29 16:26:31' where MatchId = 75 and SeerId = 6;
+update predictions set home = 2, away = 1, createdat = '2026-06-29 20:59:12' where MatchId = 76 and SeerId = 6;
+
+update matches set HomeTeamGoals = 0, AwayTeamGoals = 1, IsEnded = 1 where Id = 73;
+update matches set HomeTeamGoals = 2, AwayTeamGoals = 1, IsEnded = 1 where Id = 74;
+update matches set HomeTeamGoals = 1, AwayTeamGoals = 1, IsEnded = 1 where Id = 75;
+update matches set HomeTeamGoals = 1, AwayTeamGoals = 1, IsEnded = 1 where Id = 76;
+
+select * from countries order by Name;
+
+select * from matches;
+insert into Matches values(89, 3, '2026-06-29 18:30:00', 'GER', 1, 'PAR', 1, 'Dieciseisavos', 0);
+insert into Matches values(90, 3, '2026-06-29 19:00:00', 'GER', 3, 'PAR', 4, 'Dieciseisavos', 0);
+insert into Matches values(91, 3, '2026-06-29 23:10:00', 'NED', 1, 'MAR', 1, 'Dieciseisavos', 0);
+insert into Matches values(92, 3, '2026-06-29 23:30:00', 'NED', 0, 'MAR', 0, 'Dieciseisavos', 0);
+
+insert into Predictions values(561, 89, 1, 1, 1, '2026-06-29 18:31:12', NULL);
+insert into Predictions values(562, 89, 2, 1, 1, '2026-06-29 18:34:05', NULL);
+insert into Predictions values(563, 89, 3, 2, 1, '2026-06-29 18:34:01', NULL);
+insert into Predictions values(564, 89, 4, 2, 1, '2026-06-29 18:31:12', NULL);
+insert into Predictions values(565, 89, 5, 3, 1, '2026-06-29 18:28:51', NULL);
+insert into Predictions values(566, 89, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(567, 89, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(568, 89, 8, 2, 1, '2026-06-29 18:31:18', NULL);
+
+insert into Predictions values(569, 90, 1, 4, 5, '2026-06-29 19:14:18', NULL);
+insert into Predictions values(570, 90, 2, 5, 4, '2026-06-29 19:14:26', NULL);
+insert into Predictions values(571, 90, 3, 4, 2, '2026-06-29 19:12:37', NULL);
+insert into Predictions values(572, 90, 4, 5, 3, '2026-06-29 19:14:03', NULL);
+insert into Predictions values(573, 90, 5, 4, 2, '2026-06-29 19:12:15', NULL);
+insert into Predictions values(574, 90, 6, 5, 3, '2026-06-29 19:15:19', NULL);
+insert into Predictions values(575, 90, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(576, 90, 8, 5, 3, '2026-06-29 19:15:10', NULL);
+
+insert into Predictions values(577, 91, 1, 1, 2, '2026-06-29 23:00:00', NULL);
+insert into Predictions values(578, 91, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(579, 91, 3, 2, 1, '2026-06-29 23:00:01', NULL);
+insert into Predictions values(580, 91, 4, 1, 1, '2026-06-29 23:00:00', NULL);
+insert into Predictions values(581, 91, 5, 2, 1, '2026-06-29 23:00:00', NULL);
+insert into Predictions values(582, 91, 6, 1, 2, '2026-06-29 23:00:00', NULL);
+insert into Predictions values(583, 91, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(584, 91, 8, 2, 1, '2026-06-29 23:00:00', NULL);
+
+insert into Predictions values(585, 92, 1, 3, 4, '2026-06-29 23:40:00', NULL);
+insert into Predictions values(586, 92, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(587, 92, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(588, 92, 4, 3, 4, '2026-06-29 23:40:00', NULL);
+insert into Predictions values(589, 92, 5, 0, 3, '2026-06-29 23:40:00', NULL);
+insert into Predictions values(590, 92, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(591, 92, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(592, 92, 8, 5, 4, '2026-06-29 23:40:00', NULL);
+
+select * from predictions;
+
+
+
+insert into Matches values(73, 3, '2026-06-28 15:00:00', 'RSA', NULL, 'CAN', NULL, 'Dieciseisavos', 0);
+insert into Matches values(74, 3, '2026-06-29 13:00:00', 'BRA', NULL, 'JPN', NULL, 'Dieciseisavos', 0);
+insert into Matches values(75, 3, '2026-06-29 16:30:00', 'GER', NULL, 'PAR', NULL, 'Dieciseisavos', 0);
+insert into Matches values(76, 3, '2026-06-29 21:00:00', 'NED', NULL, 'MAR', NULL, 'Dieciseisavos', 0);
+insert into Matches values(77, 3, '2026-06-30 13:00:00', 'CIV', NULL, 'NOR', NULL, 'Dieciseisavos', 0);
+insert into Matches values(78, 3, '2026-06-30 17:00:00', 'FRA', NULL, 'SWE', NULL, 'Dieciseisavos', 0);
+insert into Matches values(79, 3, '2026-06-30 21:00:00', 'MEX', NULL, 'ECU', NULL, 'Dieciseisavos', 0);
+insert into Matches values(80, 3, '2026-07-01 12:00:00', 'ENG', NULL, 'COD', NULL, 'Dieciseisavos', 0);
+insert into Matches values(81, 3, '2026-07-01 16:00:00', 'BEL', NULL, 'SEN', NULL, 'Dieciseisavos', 0);
+insert into Matches values(82, 3, '2026-07-01 20:00:00', 'USA', NULL, 'BIH', NULL, 'Dieciseisavos', 0);
+insert into Matches values(83, 3, '2026-07-02 15:00:00', 'ESP', NULL, 'AUT', NULL, 'Dieciseisavos', 0);
+insert into Matches values(84, 3, '2026-07-02 19:00:00', 'POR', NULL, 'CRO', NULL, 'Dieciseisavos', 0);
+insert into Matches values(85, 3, '2026-07-02 23:00:00', 'SUI', NULL, 'ALG', NULL, 'Dieciseisavos', 0);
+insert into Matches values(86, 3, '2026-07-03 14:00:00', 'AUS', NULL, 'EGY', NULL, 'Dieciseisavos', 0);
+insert into Matches values(87, 3, '2026-07-03 18:00:00', 'ARG', NULL, 'CPV', NULL, 'Dieciseisavos', 0);
+insert into Matches values(88, 3, '2026-07-03 21:30:00', 'COL', NULL, 'GHA', NULL, 'Dieciseisavos', 0);
+
+insert into Predictions values(433, 73, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(434, 74, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(435, 75, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(436, 76, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(437, 77, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(438, 78, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(439, 79, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(440, 80, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(441, 81, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(442, 82, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(443, 83, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(444, 84, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(445, 85, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(446, 86, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(447, 87, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(448, 88, 1, NULL, NULL, NULL, NULL);
+
+insert into Predictions values(449, 73, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(450, 74, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(451, 75, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(452, 76, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(453, 77, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(454, 78, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(455, 79, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(456, 80, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(457, 81, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(458, 82, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(459, 83, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(460, 84, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(461, 85, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(462, 86, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(463, 87, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(464, 88, 2, NULL, NULL, NULL, NULL);
+
+insert into Predictions values(465, 73, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(466, 74, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(467, 75, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(468, 76, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(469, 77, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(470, 78, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(471, 79, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(472, 80, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(473, 81, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(474, 82, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(475, 83, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(476, 84, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(477, 85, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(478, 86, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(479, 87, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(480, 88, 3, NULL, NULL, NULL, NULL);
+
+insert into Predictions values(481, 73, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(482, 74, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(483, 75, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(484, 76, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(485, 77, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(486, 78, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(487, 79, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(488, 80, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(489, 81, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(490, 82, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(491, 83, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(492, 84, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(493, 85, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(494, 86, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(495, 87, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(496, 88, 4, NULL, NULL, NULL, NULL);
+
+insert into Predictions values(497, 73, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(498, 74, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(499, 75, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(500, 76, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(501, 77, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(502, 78, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(503, 79, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(504, 80, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(505, 81, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(506, 82, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(507, 83, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(508, 84, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(509, 85, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(510, 86, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(511, 87, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(512, 88, 5, NULL, NULL, NULL, NULL);
+
+insert into Predictions values(513, 73, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(514, 74, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(515, 75, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(516, 76, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(517, 77, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(518, 78, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(519, 79, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(520, 80, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(521, 81, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(522, 82, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(523, 83, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(524, 84, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(525, 85, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(526, 86, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(527, 87, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(528, 88, 6, NULL, NULL, NULL, NULL);
+
+insert into Predictions values(529, 73, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(530, 74, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(531, 75, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(532, 76, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(533, 77, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(534, 78, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(535, 79, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(536, 80, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(537, 81, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(538, 82, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(539, 83, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(540, 84, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(541, 85, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(542, 86, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(543, 87, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(544, 88, 7, NULL, NULL, NULL, NULL);
+
+insert into Predictions values(545, 73, 8, NULL, NULL, NULL, NULL);
+insert into Predictions values(546, 74, 8, NULL, NULL, NULL, NULL);
+insert into Predictions values(547, 75, 8, NULL, NULL, NULL, NULL);
+insert into Predictions values(548, 76, 8, NULL, NULL, NULL, NULL);
+insert into Predictions values(549, 77, 8, NULL, NULL, NULL, NULL);
+insert into Predictions values(550, 78, 8, NULL, NULL, NULL, NULL);
+insert into Predictions values(551, 79, 8, NULL, NULL, NULL, NULL);
+insert into Predictions values(552, 80, 8, NULL, NULL, NULL, NULL);
+insert into Predictions values(553, 81, 8, NULL, NULL, NULL, NULL);
+insert into Predictions values(554, 82, 8, NULL, NULL, NULL, NULL);
+insert into Predictions values(555, 83, 8, NULL, NULL, NULL, NULL);
+insert into Predictions values(556, 84, 8, NULL, NULL, NULL, NULL);
+insert into Predictions values(557, 85, 8, NULL, NULL, NULL, NULL);
+insert into Predictions values(558, 86, 8, NULL, NULL, NULL, NULL);
+insert into Predictions values(559, 87, 8, NULL, NULL, NULL, NULL);
+insert into Predictions values(560, 88, 8, NULL, NULL, NULL, NULL);
+
+select * from penalties;
+
+CREATE TABLE ExtraTimes (
+    Id        INTEGER PRIMARY KEY ASC AUTOINCREMENT,
+    MathId    INTEGER REFERENCES Matches (Id),
+    SeerId    INTEGER REFERENCES Seers (Id),
+    Home      INTEGER,
+    Away      NUMERIC,
+    CreatedAt TEXT
+);
+
+select * from Seers;
+
+insert into Seers values(7, 'VALOR', 'Victor Fermin Alor', 'Vico');
+insert into Seers values(8, 'Nico', 'Nicolas Maldonado Arcienaga', 'Niko');
+
+update Matches set HomeTeamGoals = 0, AwayTeamGoals = 0, IsEnded = 0 where Id = 73;
+
+update Seers set TelegramId = '1328544222' where Id = 8;
+
+update Predictions set Home = 1, Away = 2, CreatedAt = '2026-06-28 15:03:11' where SeerId = 8 and MatchId = 73;
+update Predictions set Home = 1, Away = 3, CreatedAt = '2026-06-28 14:52:01' where SeerId = 4 and MatchId = 73;
+
+
+insert into Matches values(89, 3, '2026-06-28 17:05:00', 'RSA', NULL, 'CAN', NULL, 'Dieciseisavos-Extra', 0);
+insert into Predictions values(529, 89, 1, NULL, NULL, NULL, NULL);
+insert into Predictions values(530, 89, 2, NULL, NULL, NULL, NULL);
+insert into Predictions values(531, 89, 3, NULL, NULL, NULL, NULL);
+insert into Predictions values(532, 89, 4, NULL, NULL, NULL, NULL);
+insert into Predictions values(533, 89, 5, NULL, NULL, NULL, NULL);
+insert into Predictions values(534, 89, 6, NULL, NULL, NULL, NULL);
+insert into Predictions values(535, 89, 7, NULL, NULL, NULL, NULL);
+insert into Predictions values(536, 89, 8, NULL, NULL, NULL, NULL);
