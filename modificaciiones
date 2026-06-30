@@ -1,0 +1,1048 @@
+commit dd00153b40b424790a692076122377cabee22581
+Merge: 304034f edcb628 7708c35
+Author: ivancho <ivan.patricio.quispe@gmail.com>
+Date:   Wed Jun 24 21:36:22 2026 -0400
+
+    WIP on master: 304034f Minor fixes for UI
+
+diff --cc Oraculo.Api/Controllers/MatchesController.cs
+index 26b0558,26b0558,0000000..e870e1e
+mode 100644,100644,000000..100644
+--- a/Oraculo.Api/Controllers/MatchesController.cs
++++ b/Oraculo.Api/Controllers/MatchesController.cs
+@@@@ -1,27 -1,27 -1,0 +1,47 @@@@
+  +using Microsoft.AspNetCore.Mvc;
++++using Microsoft.AspNetCore.SignalR;
+  +using Oraculo.Api.Exntesions;
++++using Oraculo.Api.Hubs;
+  +using Oraculo.Application.Interfaces;
++++using Oraculo.Application.Requests;
+  +
+  +namespace Oraculo.Api.Controllers;
+  +
+  +[ApiController]
+  +[Route("[controller]")]
+  +public class MatchesController : ControllerBase
+  +{
+  +    private readonly IGetMatchesIdUseCase _getMatchesIdUseCase;
++++    private readonly IUpdateMatchUseCase _updateMatchUseCase;
+  +    private readonly ILogger<MatchesController> _logger;
++++    private readonly IHubContext<MatchesNotificationHub> _hubContext;
+  +
+--     public MatchesController(IGetMatchesIdUseCase getMatchesIdUseCase, ILogger<MatchesController> logger)
++++    public MatchesController(
++++        IGetMatchesIdUseCase getMatchesIdUseCase,
++++        IUpdateMatchUseCase updateMatchUseCase,
++++        IHubContext<MatchesNotificationHub> hubContext,
++++        ILogger<MatchesController> logger)
+  +    {
+--         _logger = logger;
+  +        _getMatchesIdUseCase = getMatchesIdUseCase;
++++        _updateMatchUseCase = updateMatchUseCase;
++++        _hubContext = hubContext;
++++        _logger = logger;
+  +    }
+  +
+  +    [HttpGet("{date}/seers/{id}", Name = "GetCurrentMatches")]
+  +    public async Task<IActionResult> GetCurrentMatches([FromRoute] DateOnly date, [FromRoute] string id)
+  +    {
+  +        _logger.LogInformation("Received request for matches: {Id} on {Date}", id, date);
+  +        var response = await _getMatchesIdUseCase.ExecuteAsync(id, date);
+  +        return response.ToHttpResult();
+  +    }
++++
++++    [HttpPut("{id}", Name = "UpdateMatchById")]
++++    public async Task<IActionResult> UpdateMatchByIdAsync([FromRoute] int id, [FromBody] UpdateMatchRequest request)
++++    {
++++        _logger.LogInformation("Received request to update match: {Id}", id);
++++        var response = await _updateMatchUseCase.ExecuteAsync(id, request.HomeGoals, request.AwayGoals, request.IsEnded);
++++        await _hubContext.Clients.All.SendAsync("ReceiveScoreUpdate", id, request.HomeGoals, request.AwayGoals, request.IsEnded);
++++        return response.ToHttpResult();
++++    }
+  +}
+diff --cc Oraculo.Api/Oraculo.Api.http
+index 4736655,4736655,0000000..2357b3d
+mode 100644,100644,000000..100644
+--- a/Oraculo.Api/Oraculo.Api.http
++++ b/Oraculo.Api/Oraculo.Api.http
+@@@@ -1,14 -1,14 -1,0 +1,24 @@@@
+  +@HostAddress = https://localhost:7064
+  +
+  +GET {{HostAddress}}/matches/2026-06-19/seers/46705735
+  +Accept: application/json
+  +
+  +###
+  +
+  +GET {{HostAddress}}/predictions/matches/1/seers/6
+  +Accept: application/json
+  +
+  +###
+  +
+  +GET {{HostAddress}}/predictions/db-path
+-- Accept: application/json
++++Accept: application/json
++++
++++### Update match score using match id
++++PUT {{HostAddress}}/matches/48
++++Content-Type: application/json
++++
++++{
++++  "HomeGoals": 1,
++++  "AwayGoals": 1,
++++  "IsEnded": false
++++}
+diff --cc Oraculo.Api/Program.cs
+index d1b5f09,d1b5f09,0000000..84ea43a
+mode 100644,100644,000000..100644
+--- a/Oraculo.Api/Program.cs
++++ b/Oraculo.Api/Program.cs
+@@@@ -1,38 -1,38 -1,0 +1,48 @@@@
++++using Oraculo.Api.Hubs;
+  +using Oraculo.Application;
+  +using Oraculo.Application.Interfaces.TelegramBot;
+  +using Oraculo.Infrastructure;
+  +using Oraculo.Infrastructure.External;
+  +
+  +var builder = WebApplication.CreateBuilder(args);
+  +
+  +builder.Services.AddControllers();
+  +builder.Services.AddOpenApi();
++++builder.Services.AddSignalR();
+  +builder.Services.AddHttpClient<ITelegramBotClient, TelegramBotClient>();
+  +builder.Services.AddApplicationServices();
+  +builder.Services.AddInfrastructureServices(builder.Configuration);
+  +
++++//builder.Services.AddCors(options =>
++++//{
++++//    options.AddPolicy("AllowAll", policy =>
++++//        policy.AllowAnyOrigin()
++++//              .AllowAnyMethod()
++++//              .AllowAnyHeader());
++++//});
++++
+  +builder.Services.AddCors(options =>
+  +{
+--     //options.AddDefaultPolicy(policy =>
+--     //{
+--     //    policy.WithOrigins().AllowAnyHeader().AllowAnyMethod();
+--     //});
+--     options.AddPolicy("AllowAll", policy =>
+--         policy.AllowAnyOrigin()
++++    options.AddDefaultPolicy(policy =>
++++    {
++++        policy.WithOrigins("https://localhost:7282", "https://tu-miniapp-produccion.com")
+  +              .AllowAnyMethod()
+--               .AllowAnyHeader());
++++              .AllowAnyHeader()
++++              .AllowCredentials();
++++    });
+  +});
+  +
+  +var app = builder.Build();
+  +
+  +if (app.Environment.IsDevelopment())
+  +{
+  +    app.MapOpenApi("openapi");
+  +}
+  +
+  +app.UseHttpsRedirection();
+-- app.UseCors("AllowAll");
++++app.UseCors();
+  +app.UseAuthorization();
+  +app.MapControllers();
++++app.MapHub<MatchesNotificationHub>("/hubs/matches");
+  +
+  +app.Run();
+diff --cc Oraculo.Application/DependencyInjection.cs
+index 5079f00,5079f00,0000000..4013736
+mode 100644,100644,000000..100644
+--- a/Oraculo.Application/DependencyInjection.cs
++++ b/Oraculo.Application/DependencyInjection.cs
+@@@@ -1,20 -1,20 -1,0 +1,21 @@@@
+  +using Microsoft.Extensions.DependencyInjection;
+  +using Oraculo.Application.Interfaces;
+  +using Oraculo.Application.Interfaces.Telegram;
+  +using Oraculo.Application.Telegram;
+  +using Oraculo.Application.UseCases;
+  +
+  +namespace Oraculo.Application;
+  +
+  +public static class DependencyInjection
+  +{
+  +    public static IServiceCollection AddApplicationServices(this IServiceCollection services)
+  +    {
+  +        services.AddScoped<IGetPredictionIdUseCase, GetPredictionUseCase>();
+  +        services.AddScoped<IGetMatchesIdUseCase, GetMatchesUseCase>();
+  +        services.AddScoped<IUpdatePredictionUseCase, UpdatePredictionUseCase>();
++++        services.AddScoped<IUpdateMatchUseCase, UpdateMatchUseCase>();
+  +        services.AddScoped<ITelegramCommand, RankingCommand>();
+  +        services.AddScoped<ITelegramCommand, PredictCommand>();
+  +        return services;
+  +    }
+  +}
+diff --cc Oraculo.Application/Interfaces/IGetPredictionIdUseCase.cs
+index f27df10,f27df10,0000000..3df1d47
+mode 100644,100644,000000..100644
+--- a/Oraculo.Application/Interfaces/IGetPredictionIdUseCase.cs
++++ b/Oraculo.Application/Interfaces/IGetPredictionIdUseCase.cs
+@@@@ -1,8 -1,8 -1,0 +1,8 @@@@
+  +using Oraculo.Application.Responses;
+  +
+  +namespace Oraculo.Application.Interfaces;
+  +
+  +public interface IGetPredictionIdUseCase
+  +{
+--     public Task<Result<PredictionResponse?>> ExecuteAsync(int matchId, int seerId);
++++    Task<Result<PredictionResponse?>> ExecuteAsync(int matchId, int seerId);
+  +}
+diff --cc Oraculo.Application/Interfaces/Persistence/IMatchesRepository.cs
+index 9905b8f,9905b8f,0000000..27ee1c9
+mode 100644,100644,000000..100644
+--- a/Oraculo.Application/Interfaces/Persistence/IMatchesRepository.cs
++++ b/Oraculo.Application/Interfaces/Persistence/IMatchesRepository.cs
+@@@@ -1,8 -1,8 -1,0 +1,9 @@@@
+  +using Oraculo.Application.Responses;
+  +
+  +namespace Oraculo.Application.Interfaces.Persistence;
+  +
+  +public interface IMatchesRepository
+  +{
+--     Task<List<MatchResponse>> GetMatchesByDate(string userTelegramId, DateTime date);
++++    Task<List<MatchResponse>> GetMatchesByDate(string userTelegramId, DateTimeOffset date);
++++    Task<bool> UpdateMatchScoreById(int matchId, int homeGoals, int awayGoals, bool isEnded);
+  +}
+diff --cc Oraculo.Application/Requests/AddPredictionRequest.cs
+index d7214b4,d7214b4,0000000..dbebca4
+mode 100644,100644,000000..100644
+--- a/Oraculo.Application/Requests/AddPredictionRequest.cs
++++ b/Oraculo.Application/Requests/AddPredictionRequest.cs
+@@@@ -1,13 -1,13 -1,0 +1,13 @@@@
+  +namespace Oraculo.Application.Requests;
+  +
+  +public record UpdatePredictionRequest(
+  +    int Id,
+  +    int MatchId,
+  +    string UserId,
+  +    string HomeTeamIsoCode,
+  +    string AwayTeamIsoCode,
+  +    int HomeGoals,
+  +    int AwayGoals,
+  +    string Username,
+--     DateTime CreatedAt
++++    DateTimeOffset CreatedAt
+  +);
+diff --cc Oraculo.Application/Responses/MatchResponse.cs
+index 984047e,984047e,0000000..60f3902
+mode 100644,100644,000000..100644
+--- a/Oraculo.Application/Responses/MatchResponse.cs
++++ b/Oraculo.Application/Responses/MatchResponse.cs
+@@@@ -1,19 -1,19 -1,0 +1,19 @@@@
+  +namespace Oraculo.Application.Responses;
+  +
+  +public record MatchResponse(
+  +    int Id,
+  +    int PredictionId,
+  +    string HomeId,
+  +    string HomeFlag,
+  +    string Home,
+  +    int? HomeGoals,
+  +    int? HomePrediction,
+  +    string AwayId,
+  +    string AwayFlag,
+  +    string Away,
+  +    int? AwayGoals,
+  +    int? AwayPrediction,
+--     DateTime MatchTime,
+--     DateTime? PredictionDate,
++++    DateTimeOffset MatchTime,
++++    DateTimeOffset? PredictionDate,
+  +    bool IsDone
+  +);
+diff --cc Oraculo.Application/Responses/PredictionResponse.cs
+index eee9687,eee9687,0000000..0a5ca58
+mode 100644,100644,000000..100644
+--- a/Oraculo.Application/Responses/PredictionResponse.cs
++++ b/Oraculo.Application/Responses/PredictionResponse.cs
+@@@@ -1,8 -1,8 -1,0 +1,8 @@@@
+  +namespace Oraculo.Application.Responses;
+  +
+  +public record PredictionResponse(
+  +    bool Success,
+  +    string OfficialResult,
+  +    string Prediction,
+--     DateTime? PredictionDate
++++    DateTimeOffset? PredictionDate
+  +);
+diff --cc Oraculo.Application/UseCases/GetMatchesUseCase.cs
+index c789289,c789289,0000000..ccba0e5
+mode 100644,100644,000000..100644
+--- a/Oraculo.Application/UseCases/GetMatchesUseCase.cs
++++ b/Oraculo.Application/UseCases/GetMatchesUseCase.cs
+@@@@ -1,23 -1,23 -1,0 +1,25 @@@@
+  +using Oraculo.Application.Interfaces;
+  +using Oraculo.Application.Interfaces.Persistence;
+  +using Oraculo.Application.Responses;
+  +
+  +namespace Oraculo.Application.UseCases;
+  +
+  +public class GetMatchesUseCase : IGetMatchesIdUseCase
+  +{
+  +    private readonly IMatchesRepository _matchesRepository;
+  +
+  +    public GetMatchesUseCase(IMatchesRepository matchesRepository)
+  +    {
+  +        _matchesRepository = matchesRepository;
+  +    }
+  +
+  +    public async Task<Result<List<MatchResponse>>> ExecuteAsync(string userTelegramId, DateOnly? date = null)
+  +    {
+--         var currentDate = date is null ? DateTime.Now : date.Value.ToDateTime(TimeOnly.MinValue);
++++        DateTimeOffset currentDate = date is null
++++            ? DateTimeOffset.UtcNow
++++            : new DateTimeOffset(date.Value.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+  +        var matches = await _matchesRepository.GetMatchesByDate(userTelegramId, currentDate);
+  +        if (matches.Any()) return Result<List<MatchResponse>>.Success(CodeResponseType.Ok, matches);
+  +        return Result<List<MatchResponse>>.Failure(CodeResponseType.NotFound, "Not found matches.");
+  +    }
+  +}
+diff --cc Oraculo.Infrastructure/Persistence/Entities/Match.cs
+index 3554540,3554540,0000000..40bee9a
+mode 100644,100644,000000..100644
+--- a/Oraculo.Infrastructure/Persistence/Entities/Match.cs
++++ b/Oraculo.Infrastructure/Persistence/Entities/Match.cs
+@@@@ -1,30 -1,30 -1,0 +1,30 @@@@
+  +﻿namespace Oraculo.Infrastructure.Persistence.Entities;
+  +
+  +public class Match
+  +{
+  +    public int Id { get; set; }
+  +
+  +    public int PhaseId { get; set; }
+  +
+--     public DateTime ScheduleAt { get; set; }
++++    public DateTimeOffset ScheduleAt { get; set; }
+  +
+  +    public string HomeTeam { get; set; } = null!;
+  +
+  +    public int? HomeTeamGoals { get; set; }
+  +
+  +    public string AwayTeam { get; set; } = null!;
+  +
+  +    public int? AwayTeamGoals { get; set; }
+  +
+  +    public string? Group { get; set; }
+  +
+  +    public int? IsEnded { get; set; }
+  +
+  +    public virtual Country AwayTeamNavigation { get; set; } = null!;
+  +
+  +    public virtual Country HomeTeamNavigation { get; set; } = null!;
+  +
+  +    public virtual Phase Phase { get; set; } = null!;
+  +
+  +    public virtual ICollection<Prediction> Predictions { get; set; } = new List<Prediction>();
+  +}
+diff --cc Oraculo.Infrastructure/Persistence/Entities/Prediction.cs
+index 69e33d6,69e33d6,0000000..c83f583
+mode 100644,100644,000000..100644
+--- a/Oraculo.Infrastructure/Persistence/Entities/Prediction.cs
++++ b/Oraculo.Infrastructure/Persistence/Entities/Prediction.cs
+@@@@ -1,22 -1,22 -1,0 +1,22 @@@@
+  +﻿namespace Oraculo.Infrastructure.Persistence.Entities;
+  +
+  +public class Prediction
+  +{
+  +    public int Id { get; set; }
+  +
+  +    public int MatchId { get; set; }
+  +
+  +    public int SeerId { get; set; }
+  +
+  +    public int? Home { get; set; }
+  +
+  +    public int? Away { get; set; }
+  +
+--     public DateTime? CreatedAt { get; set; }
++++    public DateTimeOffset? CreatedAt { get; set; }
+  +
+  +    public string? TelegramMessageId { get; set; }
+  +
+  +    public virtual Match Match { get; set; } = null!;
+  +
+  +    public virtual Seer Seer { get; set; } = null!;
+  +}
+diff --cc Oraculo.Infrastructure/Persistence/OraculoContext.cs
+index 7b93eb3,7b93eb3,0000000..394bbf7
+mode 100644,100644,000000..100644
+--- a/Oraculo.Infrastructure/Persistence/OraculoContext.cs
++++ b/Oraculo.Infrastructure/Persistence/OraculoContext.cs
+@@@@ -1,48 -1,48 -1,0 +1,62 @@@@
+  +﻿using Microsoft.EntityFrameworkCore;
+  +using Oraculo.Infrastructure.Persistence.Entities;
+  +
+  +namespace Oraculo.Infrastructure.Persistence;
+  +
+  +public partial class OraculoContext : DbContext
+  +{
+  +    public OraculoContext() { }
+  +
+  +    public OraculoContext(DbContextOptions<OraculoContext> options) : base(options) { }
+  +
+  +    public virtual DbSet<Country> Countries { get; set; }
+  +    public virtual DbSet<Match> Matches { get; set; }
+  +    public virtual DbSet<Phase> Phases { get; set; }
+  +    public virtual DbSet<Prediction> Predictions { get; set; }
+  +    public virtual DbSet<Seer> Seers { get; set; }
+  +
+  +    protected override void OnModelCreating(ModelBuilder modelBuilder)
+  +    {
+  +        modelBuilder.Entity<Match>(entity =>
+  +        {
+  +            entity.Property(e => e.Group).HasColumnType("INTEGER");
+  +            entity.HasOne(d => d.AwayTeamNavigation).WithMany(p => p.MatchAwayTeamNavigations)
+  +                .HasForeignKey(d => d.AwayTeam)
+  +                .OnDelete(DeleteBehavior.ClientSetNull);
+  +            entity.HasOne(d => d.HomeTeamNavigation).WithMany(p => p.MatchHomeTeamNavigations)
+  +                .HasForeignKey(d => d.HomeTeam)
+  +                .OnDelete(DeleteBehavior.ClientSetNull);
+  +            entity.HasOne(d => d.Phase).WithMany(p => p.Matches)
+  +                .HasForeignKey(d => d.PhaseId)
+  +                .OnDelete(DeleteBehavior.ClientSetNull);
+  +        });
+  +
+  +        modelBuilder.Entity<Prediction>(entity =>
+  +        {
+  +            entity.HasOne(d => d.Match).WithMany(p => p.Predictions)
+  +                .HasForeignKey(d => d.MatchId)
+  +                .OnDelete(DeleteBehavior.ClientSetNull);
+  +            entity.HasOne(d => d.Seer).WithMany(p => p.Predictions)
+  +                .HasForeignKey(d => d.SeerId)
+  +                .OnDelete(DeleteBehavior.ClientSetNull);
+  +        });
+  +
++++        if (Database.ProviderName == "Microsoft.EntityFrameworkCore.Sqlite")
++++        {
++++            foreach (var entityType in modelBuilder.Model.GetEntityTypes())
++++            {
++++                var properties = entityType.GetProperties()
++++                    .Where(p => p.ClrType == typeof(DateTimeOffset) || p.ClrType == typeof(DateTimeOffset?));
++++
++++                foreach (var property in properties)
++++                {
++++                    property.SetValueConverter(new Microsoft.EntityFrameworkCore.Storage.ValueConversion.DateTimeOffsetToStringConverter());
++++                }
++++            }
++++        }
++++
+  +        OnModelCreatingPartial(modelBuilder);
+  +    }
+  +
+  +    partial void OnModelCreatingPartial(ModelBuilder modelBuilder);
+  +}
+diff --cc Oraculo.Infrastructure/Persistence/OraculoDB
+index 5b51dc8,5b51dc8,0000000..5a46de0
+mode 100644,100644,000000..100644
+Binary files differ
+diff --cc Oraculo.Infrastructure/Persistence/Repositories/MatchesRepository.cs
+index 8aa03a6,8aa03a6,0000000..a66c870
+mode 100644,100644,000000..100644
+--- a/Oraculo.Infrastructure/Persistence/Repositories/MatchesRepository.cs
++++ b/Oraculo.Infrastructure/Persistence/Repositories/MatchesRepository.cs
+@@@@ -1,30 -1,30 -1,0 +1,44 @@@@
+  +using Microsoft.EntityFrameworkCore;
+  +using Oraculo.Application.Interfaces.Persistence;
+  +using Oraculo.Application.Responses;
+  +
+  +namespace Oraculo.Infrastructure.Persistence.Repositories;
+  +
+  +public class MatchesRepository : IMatchesRepository
+  +{
+  +    private readonly OraculoContext _context;
+  +
+  +    public MatchesRepository(OraculoContext context)
+  +    {
+  +        _context = context;
+  +    }
+  +
+--     public async Task<List<MatchResponse>> GetMatchesByDate(string userTelegramId, DateTime date)
++++    public async Task<List<MatchResponse>> GetMatchesByDate(string userTelegramId, DateTimeOffset date)
+  +    {
+--         DateTime startDate = date.Date.AddHours(5);
+--         DateTime endDate = startDate.AddHours(25);
++++        DateTimeOffset startDate = date.Date.AddHours(5);
++++        DateTimeOffset endDate = startDate.AddHours(25);
+  +        List<Entities.Country> countries = await _context.Countries.ToListAsync();
+  +        List<Entities.Match> matches = await _context
+  +            .Matches
+  +            .Include(m => m.Predictions.Where(p => p.Seer.TelegramId == userTelegramId))
+  +                .ThenInclude(p => p.Seer)
+--             .Where(m => m.ScheduleAt >= startDate && m.ScheduleAt <= endDate
+--                 && m.Predictions.Any(p => p.Seer.TelegramId == userTelegramId))
++++            .Where(m => m.ScheduleAt >= startDate && m.ScheduleAt <= endDate)
+  +            .ToListAsync();
+  +        return Mapping.ToDto(matches, countries);
+  +    }
++++
++++    public async Task<bool> UpdateMatchScoreById(int matchId, int homeGoals, int awayGoals, bool isEnded)
++++    {
++++        Entities.Match? match = await _context.Matches.FindAsync(matchId);
++++        if (match is null)
++++        {
++++            return false;
++++        }
++++        match.HomeTeamGoals = homeGoals;
++++        match.AwayTeamGoals = awayGoals;
++++        match.IsEnded = isEnded ? 1 : 0;
++++        _context.Matches.Update(match);
++++        await _context.SaveChangesAsync();
++++        return true;
++++    }
+  +}
+diff --cc Oraculo.Web/Components/MatchComponent.razor
+index 9107a5e,9107a5e,0000000..6c9c518
+mode 100644,100644,000000..100644
+--- a/Oraculo.Web/Components/MatchComponent.razor
++++ b/Oraculo.Web/Components/MatchComponent.razor
+@@@@ -1,121 -1,121 -1,0 +1,121 @@@@
+  +﻿@using Oraculo.Web.Models
+  +
+  +<div class="match-card @(_isExpanded ? "expanded" : "") @(Match.Home.Goals == Match.Prediction.HomeGoals && Match.Away.Goals == Match.Prediction.AwayGoals ? "done" : "")" @onclick="ToggleAccordion">
+  +
+  +    <div class="match-header">
+  +        <div class="team-container">
+  +            <div class="flag-score">
+  +                <div class="fi fi-@Match.Home.Flag"></div>
+  +                <div>
+  +                    <div class="score">@Match.Home.Goals</div>
+  +                    <div class="prediction">@(Match.Prediction.HomeGoals?.ToString() ?? "-")</div>
+  +                </div>
+  +            </div>
+  +            <span class="team-name me-4 pe-3">@Match.Home.Name</span>
+  +        </div>
+  +
+  +        <div class="separator-container">
+  +            @if (GetMatchStatus() == "NOW")
+  +            {
+--                 <div class="badge-live">@Match.Scheduling.ToString("HH:mm")</div>
++++                <div class="badge-live">@Match.Scheduling.ToLocalTime().ToString("HH:mm")</div>
+  +            }
+  +            else
+  +            {
+--                 <div class="match-status">@Match.Scheduling.ToString("HH:mm")</div>
++++                <div class="match-status">@Match.Scheduling.ToLocalTime().ToString("HH:mm")</div>
+  +            }
+  +            @if (GetMatchStatus() == "NOW" || GetMatchStatus() == "END")
+  +            {
+  +                <div>🔒</div>
+  +            }
+  +        </div>
+  +
+  +        <div class="team-container">
+  +            <div class="flag-score">
+  +                <div>
+  +                    <div class="score">@Match.Away.Goals</div>
+  +                    <div class="prediction">@(Match.Prediction.AwayGoals?.ToString() ?? "-")</div>
+  +                </div>
+  +                <div class="fi fi-@Match.Away.Flag"></div>
+  +            </div>
+  +            <span class="team-name ms-4 ps-3">@Match.Away.Name</span>
+  +        </div>
+  +    </div>
+  +
+  +    @if (_isExpanded && !Match.IsDone && !IsMatchStarted)
+  +    {
+  +        <div class="accordion-body" @onclick:stopPropagation="true">
+  +            <div class="score-inputs">
+  +                <div class="score-field">
+  +                    <label>@Match.Home.Name</label>
+  +                    <input type="number" min="0" max="99" @bind="_homeScore" @bind:event="oninput" placeholder="0" />
+  +                </div>
+  +
+  +                <span class="score-divider">-</span>
+  +
+  +                <div class="score-field">
+  +                    <label>@Match.Away.Name</label>
+  +                    <input type="number" min="0" max="99" @bind="_awayScore" @bind:event="oninput" placeholder="0" />
+  +                </div>
+  +            </div>
+  +
+  +            <div class="mx-3 px-3">
+  +                <button class="btn-save" @onclick="AssignScore" disabled="@(!IsValid)">
+  +                    Asignar Pronóstico
+  +                </button>
+  +            </div>
+  +        </div>
+  +    }
+  +</div>
+  +
+  +@code {
+  +    [Parameter, EditorRequired]
+  +    public MatchPredictionModel Match { get; set; } = default!;
+  +
+  +    [Parameter]
+  +    public EventCallback<MatchPredictionModel> OnScoreSaved { get; set; }
+  +
+  +    private bool _isExpanded;
+  +    private int? _homeScore;
+  +    private int? _awayScore;
+  +
+--     private bool IsMatchStarted => DateTime.Now >= Match.Scheduling;
++++    private bool IsMatchStarted => DateTimeOffset.UtcNow >= Match.Scheduling;
+  +    private bool IsValid => _homeScore.HasValue && _awayScore.HasValue && _homeScore >= 0 && _awayScore >= 0;
+  +
+  +    protected override void OnParametersSet()
+  +    {
+  +        _homeScore = Match.Prediction.HomeGoals;
+  +        _awayScore = Match.Prediction.AwayGoals;
+  +    }
+  +
+  +    private string GetMatchStatus()
+  +    {
+  +        if (Match.IsDone)
+  +            return "END";
+  +
+  +        if (IsMatchStarted)
+  +            return "NOW";
+  +
+  +        return "VS.";
+  +    }
+  +
+  +    private void ToggleAccordion()
+  +    {
+  +        if (Match.IsDone || IsMatchStarted)
+  +            return;
+  +
+  +        _isExpanded = !_isExpanded;
+  +    }
+  +
+  +    private async Task AssignScore()
+  +    {
+  +        if (!IsValid || Match.IsDone || IsMatchStarted)
+  +            return;
+  +
+  +        Match.Prediction.HomeGoals = _homeScore;
+  +        Match.Prediction.AwayGoals = _awayScore;
+--         Match.IsDone = Match.Scheduling <= DateTime.Now;
+--         _isExpanded = Match.Scheduling <= DateTime.Now;
++++        Match.IsDone = Match.Scheduling <= DateTimeOffset.UtcNow;
++++        _isExpanded = Match.Scheduling <= DateTimeOffset.UtcNow;
+  +
+  +        await OnScoreSaved.InvokeAsync(Match);
+  +    }
+  +}
+diff --cc Oraculo.Web/Models/MatchModel.cs
+index b1bb632,b1bb632,0000000..cd3002f
+mode 100644,100644,000000..100644
+--- a/Oraculo.Web/Models/MatchModel.cs
++++ b/Oraculo.Web/Models/MatchModel.cs
+@@@@ -1,19 -1,19 -1,0 +1,19 @@@@
+  +﻿namespace Oraculo.Web.Models;
+  +
+  +public record MatchModel(
+  +    int Id,
+  +    int PredictionId,
+  +    string HomeId,
+  +    string HomeFlag,
+  +    string Home,
+  +    int? HomeGoals,
+  +    int? HomePrediction,
+  +    string AwayId,
+  +    string AwayFlag,
+  +    string Away,
+  +    int? AwayGoals,
+  +    int? AwayPrediction,
+--     DateTime MatchTime,
+--     DateTime? PredictionDate,
++++    DateTimeOffset MatchTime,
++++    DateTimeOffset? PredictionDate,
+  +    bool IsDone
+  +);
+diff --cc Oraculo.Web/Models/MatchPredictionModel.cs
+index 67ec3c8,67ec3c8,0000000..ccdd926
+mode 100644,100644,000000..100644
+--- a/Oraculo.Web/Models/MatchPredictionModel.cs
++++ b/Oraculo.Web/Models/MatchPredictionModel.cs
+@@@@ -1,28 -1,28 -1,0 +1,28 @@@@
+  +﻿namespace Oraculo.Web.Models;
+  +
+  +public class MatchPredictionModel
+  +{
+  +    public int Id { get; set; }
+  +    public string UserId { get; set; } = string.Empty;
+--     public DateTime Scheduling { get; set; }
++++    public DateTimeOffset Scheduling { get; set; }
+  +    public TeamModel Home { get; set; } = new();
+  +    public TeamModel Away { get; set; } = new();
+  +    public PredictionModel Prediction { get; set; } = new();
+  +    public bool IsDone { get; set; }
+  +}
+  +
+  +public class TeamModel
+  +{
+  +    public string Id { get; set; } = string.Empty;
+  +    public string Flag { get; set; } = string.Empty;
+  +    public string Name { get; set; } = string.Empty;
+  +    public int? Goals { get; set; }
+  +}
+  +
+  +public class PredictionModel
+  +{
+  +    public int Id { get; set; }
+  +    public int? HomeGoals { get; set; }
+  +    public int? AwayGoals { get; set; }
+--     public DateTime? PredictedAt { get; set; }
++++    public DateTimeOffset? PredictedAt { get; set; }
+  +}
+diff --cc Oraculo.Web/Models/UpdatePrediction.cs
+index 8c9d97b,8c9d97b,0000000..5928151
+mode 100644,100644,000000..100644
+--- a/Oraculo.Web/Models/UpdatePrediction.cs
++++ b/Oraculo.Web/Models/UpdatePrediction.cs
+@@@@ -1,13 -1,13 -1,0 +1,13 @@@@
+  +﻿namespace Oraculo.Web.Models;
+  +
+  +public record UpdatedPredictionModel(
+  +    int Id,
+  +    int MatchId,
+  +    string UserId,
+  +    string HomeTeamIsoCode,
+  +    string AwayTeamIsoCode,
+  +    int HomeGoals,
+  +    int AwayGoals,
+  +    string Username,
+--     DateTime CreatedAt
++++    DateTimeOffset CreatedAt
+  +);
+diff --cc Oraculo.Web/Oraculo.Web.csproj
+index 795378b,795378b,0000000..a7f22a2
+mode 100644,100644,000000..100644
+--- a/Oraculo.Web/Oraculo.Web.csproj
++++ b/Oraculo.Web/Oraculo.Web.csproj
+@@@@ -1,15 -1,15 -1,0 +1,16 @@@@
+  +<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+  +
+  +  <PropertyGroup>
+  +    <TargetFramework>net10.0</TargetFramework>
+  +    <Nullable>enable</Nullable>
+  +    <ImplicitUsings>enable</ImplicitUsings>
+  +    <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
+  +  </PropertyGroup>
+  +
+  +  <ItemGroup>
+  +    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.9" />
+  +    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.9" PrivateAssets="all" />
++++    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.9" />
+  +  </ItemGroup>
+  +
+  +</Project>
+diff --cc Oraculo.Web/Pages/Home.razor
+index 85c1202,85c1202,0000000..ee3f20f
+mode 100644,100644,000000..100644
+--- a/Oraculo.Web/Pages/Home.razor
++++ b/Oraculo.Web/Pages/Home.razor
+@@@@ -1,180 -1,180 -1,0 +1,215 @@@@
+  +﻿@page "/"
+-- @inject IJSRuntime JS
+  +
+  +@using Oraculo.Web.Services
+  +@using Oraculo.Web.Components
+  +@using Oraculo.Web.Helpers
++++@using Microsoft.AspNetCore.SignalR.Client
+  +
++++@inject IJSRuntime JS
++++@inject NavigationManager NavigationManager
+  +@inject OraculoService OraculoApi
+  +@inject TelegramHelper Telegram
+  +
+  +<div class="container">
+  +    <div class="rounded-5">
+  +        <h3 class="text-center">📝 Partidos del día</h3>
+  +        @if (_isSending)
+  +        {
+  +            <div class="position-fixed top-0 start-0 w-100 h-100 d-flex flex-column justify-content-center align-items-center"
+  +                 style="background-color: rgba(0, 0, 0, 0.7); z-index: 9999; color: white;">
+  +                <div class="spinner-border text-primary mb-3" role="status" style="width: 3rem; height: 3rem;"></div>
+  +                <h5 class="fw-bold">Guardando pronósticos...</h5>
+  +                <p class="small text-muted text-center px-4">Procesando tus datos y notificando al grupo, no cierres la app.</p>
+  +            </div>
+  +        }
+  +        @if (_isLoading)
+  +        {
+  +            <div class="text-center py-4">
+  +                <div class="spinner-border text-primary" role="status">
+  +                    <span class="visually-hidden">Cargando partidos...</span>
+  +                </div>
+  +                <p class="mt-2">Cargando partidos...</p>
+  +            </div>
+  +        }        
+  +        else if (!_matches.Any())
+  +        {
+  +            <p class="text-center py-3">No hay partidos programados para hoy.</p>
+  +        }
+  +        else
+  +        {
+  +            @foreach (var match in _matches)
+  +            {
+  +                <MatchComponent Match="match" OnScoreSaved="OnMatchSaved" />
+  +            }
+  +        }
+  +    </div>
+  +</div>
+  +
+  +        
+  +@code {
+  +    private long? _telegramUserId;
+  +    private string _name = "Usuario";
+  +    private bool _isTelegram;
+  +    private bool _isLoading = true;
+  +    private bool _isSending = false;
+--     private string today = DateTime.Now.ToString("yyyy-MM-dd");
++++    private string today = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd");
++++    private HubConnection? _hubConnection;
+  +    private List<Models.MatchPredictionModel> _matches = new();
+  +    private List<Models.UpdatedPredictionModel> _predictions = new();
+  +
+  +    protected override async Task OnInitializedAsync()
+  +    {
+  +        _isLoading = true;
+  +    }
+  +
+  +    protected override async Task OnAfterRenderAsync(bool firstRender)
+  +    {
+  +        if (!firstRender) return;
+  +
+  +        _isTelegram = await Telegram.IsAvailableAsync();
+  +
+  +        if (_isTelegram)
+  +        {
+  +            await Telegram.ReadyAsync();
+  +            await Task.Delay(250);
+  +
+  +            var user = await Telegram.GetUserAsync();
+  +
+  +            //TODO: Remove or comment the following line before push
+--             // user = new Models.TelegramUserModel { Id = 46705735, FirstName = "Test User" };
++++            user = new Models.TelegramUserModel { Id = 77417505, FirstName = "Jorge Lopez" };
+  +
+  +            if (user is not null && user.Id != 0)
+  +            {
+  +                _telegramUserId = user.Id;
+  +                _name = string.IsNullOrEmpty(user.FirstName) ? "Usuario" : user.FirstName;
+  +                await GetCurrentMatchesByUserId(_telegramUserId.ToString()!, today);
++++
++++                _hubConnection = new HubConnectionBuilder()
++++                    .WithUrl(NavigationManager.ToAbsoluteUri("https://localhost:7064/hubs/matches"))
++++                    .WithAutomaticReconnect()
++++                    .Build();
++++
++++                _hubConnection.On<int, int, int, bool>("ReceiveScoreUpdate", (matchId, homeGoals, awayGoals, isDone) =>
++++                {
++++                    var match = _matches.FirstOrDefault(m => m.Id == matchId);
++++                    if (match != null)
++++                    {
++++                        match.Home.Goals = homeGoals;
++++                        match.Away.Goals = awayGoals;
++++                        match.IsDone = isDone;
++++                        InvokeAsync(StateHasChanged);
++++                        Telegram.HapticNotificationAsync("light");
++++                    }
++++                });
++++                await _hubConnection.StartAsync();
+  +            }
+  +            else
+  +            {
+  +                _name = "Error al leer user de JS";
+  +            }
+  +
+  +            Telegram.OnMainButtonClicked += SendPredictionsAsync;
+  +            await Telegram.ShowMainButtonAsync("ENVIAR PRONÓSTICO");
+  +        }
+  +        _isLoading = false;
+  +        StateHasChanged();
+  +    }
+  +
+  +    private async Task GetCurrentMatchesByUserId(string telegramId, string date)
+  +    {
+  +        var matches = await OraculoApi.GetMatchesTodayAsync(telegramId, date);
+  +        if (matches.Any())
+  +        {
+  +            _matches = matches.Select(m => new Models.MatchPredictionModel
+  +            {
+  +                Id = m.Id,
+  +                UserId = telegramId,
+  +                Scheduling = m.MatchTime,
+  +                IsDone = m.IsDone,
+  +                Home = new Models.TeamModel { Id = m.HomeId, Name = m.Home, Flag = m.HomeFlag, Goals = m.HomeGoals },
+  +                Away = new Models.TeamModel { Id = m.AwayId, Name = m.Away, Flag = m.AwayFlag, Goals = m.AwayGoals },
+  +                Prediction = new Models.PredictionModel { AwayGoals = m.AwayPrediction, HomeGoals = m.HomePrediction, Id = m.PredictionId, PredictedAt = m.PredictionDate }
+  +            }).ToList();
+  +        }
+  +    }
+  +
+  +    private async Task SendPredictionsAsync()
+  +    {
+  +        if (!_predictions.Any())
+  +        {
+  +            await Telegram.ShowAlertAsync("No has realizado ningún cambio en tus predicciones.");
+  +            return;
+  +        }
+  +        try
+  +        {
+  +            _isSending = true;
+  +            await InvokeAsync(StateHasChanged);
+  +            await Telegram.HapticNotificationAsync("success");
+  +            bool result = await OraculoApi.UpdatePredictionsAsync(_predictions);
+  +            _isSending = false;
+  +            await InvokeAsync(StateHasChanged);
+  +            if (result)
+  +            {
+  +                await Telegram.ShowAlertAsync($"¡Tu predicción ha sido enviada con éxito, {_name}!");
+  +                await Task.Delay(100);
+  +                await Telegram.CloseAsync();
+  +            }
+  +            else
+  +            {
+  +                await Telegram.ShowAlertAsync("El servidor no devolvió una respuesta válida.");
+  +            }
+  +        }
+  +        catch (Exception ex)
+  +        {
+  +            _isSending = false;
+  +            await InvokeAsync(StateHasChanged);
+  +            await Telegram.ShowAlertAsync($"Error al enviar: {ex.Message}");
+  +        }
+  +    }
+  +
+  +    private async Task OnMatchSaved(Models.MatchPredictionModel match)
+  +    {
+  +        Models.UpdatedPredictionModel prediction = new
+  +        (
+  +            match.Prediction.Id,
+  +            match.Id,
+  +            match.UserId,
+  +            match.Home.Flag,
+  +            match.Away.Flag,
+  +            match.Prediction.HomeGoals ?? 0,
+  +            match.Prediction.AwayGoals ?? 0,
+  +            _name,
+--             DateTime.Now
++++            DateTimeOffset.UtcNow
+  +        );
+  +        var existingPrediction = _predictions.FirstOrDefault(p => p.Id == prediction.Id);
+  +        if (existingPrediction is not null)
+  +        {
+  +            _predictions.Remove(existingPrediction);
+  +        }
+  +        if (prediction.CreatedAt <= match.Scheduling.AddMinutes(1))
+  +        {
+  +            _predictions.Add(prediction);
+  +        }
+  +    }
+  +
+--     public void Dispose()
++++    public async ValueTask DisposeAsync()
+  +    {
+  +        if (_isTelegram)
+  +        {
+  +            Telegram.OnMainButtonClicked -= SendPredictionsAsync;
+  +        }
++++
++++        if (_hubConnection is not null)
++++        {
++++            try
++++            {
++++                await _hubConnection.StopAsync();
++++                await _hubConnection.DisposeAsync();
++++            }
++++            catch (Exception ex)
++++            {
++++                Console.WriteLine($"Error at disposing SignalR: {ex.Message}");
++++            }
++++        }
+  +    }
+  +}
+diff --cc Oraculo.Web/Program.cs
+index f0fd677,f0fd677,0000000..004e0dd
+mode 100644,100644,000000..100644
+--- a/Oraculo.Web/Program.cs
++++ b/Oraculo.Web/Program.cs
+@@@@ -1,16 -1,16 -1,0 +1,16 @@@@
+  +using Oraculo.Web;
+  +using Oraculo.Web.Helpers;
+  +using Oraculo.Web.Services;
+  +using Microsoft.AspNetCore.Components.Web;
+  +using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
+  +
+  +var builder = WebAssemblyHostBuilder.CreateDefault(args);
+  +builder.RootComponents.Add<App>("#app");
+  +builder.RootComponents.Add<HeadOutlet>("head::after");
+  +
+-- //builder.Services.AddScoped(sp => new HttpClient { BaseAddress = new Uri("https://localhost:7064") });
+-- builder.Services.AddScoped(sp => new HttpClient { BaseAddress = new Uri("https://evancho.duckdns.org") });
++++builder.Services.AddScoped(sp => new HttpClient { BaseAddress = new Uri("https://localhost:7064") });
++++//builder.Services.AddScoped(sp => new HttpClient { BaseAddress = new Uri("https://evancho.duckdns.org") });
+  +builder.Services.AddScoped<OraculoService>();
+  +builder.Services.AddScoped<TelegramHelper>();
+  +
+  +await builder.Build().RunAsync();
+diff --cc Oraculo.Web/Services/OraculoService.cs
+index 1a85b28,1a85b28,0000000..69507eb
+mode 100644,100644,000000..100644
+--- a/Oraculo.Web/Services/OraculoService.cs
++++ b/Oraculo.Web/Services/OraculoService.cs
+@@@@ -1,49 -1,49 -1,0 +1,51 @@@@
+  +﻿using Oraculo.Web.Models;
+  +using System.Net.Http.Json;
+  +
+  +namespace Oraculo.Web.Services;
+  +
+  +public class OraculoService
+  +{
+  +    private readonly HttpClient _httpClient;
+  +
+  +    public OraculoService(HttpClient httpClient)
+  +    {
+  +        _httpClient = httpClient;
+  +    }
+  +
+  +    public async Task<List<MatchModel>> GetMatchesTodayAsync(string telegramId, string date)
+  +    {
++++        //TODO: Remove the next line
++++        telegramId = "77417505";
+  +        List<MatchModel> matches = new();
+  +        try
+  +        {
+  +            var response = await _httpClient.GetAsync($"matches/{date}/seers/{telegramId}");
+  +            if (response.IsSuccessStatusCode)
+  +            {
+  +                matches = await response.Content.ReadFromJsonAsync<List<MatchModel>>() ?? new List<MatchModel>();
+  +            }
+  +        }
+  +        catch (Exception ex)
+  +        {
+  +            Console.WriteLine($"Error fetching matches: {ex.Message}");
+  +        }        
+  +        return matches;
+  +    }
+  +
+  +    public async Task<bool> UpdatePredictionsAsync(List<UpdatedPredictionModel> predictions)
+  +    {
+  +        try
+  +        {
+  +            var response = await _httpClient.PostAsJsonAsync($"predictions", predictions);
+  +            if (response.IsSuccessStatusCode)
+  +            {
+  +                return true;
+  +            }
+  +        }
+  +        catch (Exception ex)
+  +        {
+  +            Console.WriteLine($"Error updating predictions: {ex.Message}");
+  +        }
+  +        return false;
+  +    }
+  +}
+
+-1004353114580
+🏴
+🏴
