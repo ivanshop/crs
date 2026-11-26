@@ -1,0 +1,854 @@
+-- =====================================================================
+-- Check Web API - esquema de base de datos (v2)
+-- PostgreSQL 18 (usa uuidv7() nativo)
+--
+-- Esquemas:
+--   core        personas, empresas, agencias y agentes, catálogos, parentescos, lista blanca
+--   offer       productos, planes, coberturas, asistencias, exclusiones, reglas, FAQ, convenios
+--   sales       contratos y todo lo que cuelga de ellos, incluidos los eventos
+--   compliance  validaciones SEGIP/AMLC/AN, declaraciones PEP, lecturas LlamitAI
+--   feedback    encuestas
+--   (La documentación —plantillas y PDF— vive en otro sistema.)
+--
+-- Convenciones:
+--   * Nombres en inglés, snake_case.
+--   * bytea  = dato personal cifrado en la aplicación (AES-256-GCM, llave en Key Vault).
+--   * *_hash = HMAC-SHA256 con llave secreta (pepper), para buscar sin descifrar.
+--   * Estados como text + CHECK (fáciles de leer y de mapear a enums de C#).
+--   * Auditoría: created_by, created_at, updated_by, updated_at.
+-- =====================================================================
+
+CREATE SCHEMA IF NOT EXISTS core;
+CREATE SCHEMA IF NOT EXISTS offer;
+CREATE SCHEMA IF NOT EXISTS sales;
+CREATE SCHEMA IF NOT EXISTS compliance;
+CREATE SCHEMA IF NOT EXISTS feedback;
+
+-- Comparación sin distinguir mayúsculas ni tildes (catálogos y textos de oferta)
+CREATE COLLATION IF NOT EXISTS core.ci_ai (
+    provider = icu,
+    deterministic = false,
+    locale = 'und-u-ks-level1'
+);
+
+-- =====================================================================
+-- core
+-- =====================================================================
+
+-- Países: tabla propia porque la referencian claves foráneas (nacionalidad)
+-- y tiene atributos propios (ISO alfa-2, alfa-3, gentilicio).
+CREATE TABLE core.countries (
+    id               smallint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    iso_code         char(2) NOT NULL,                  -- BO
+    iso3_code        char(3) NOT NULL,                  -- BOL
+    name             text COLLATE core.ci_ai NOT NULL,  -- Bolivia
+    nationality      text COLLATE core.ci_ai NOT NULL,  -- Boliviana
+    sort_order       int NOT NULL DEFAULT 0,
+    is_active        boolean NOT NULL DEFAULT true,
+    created_by       text NOT NULL,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_by       text,
+    updated_at       timestamptz,
+    CONSTRAINT countries_iso_uk UNIQUE (iso_code),
+    CONSTRAINT countries_iso3_uk UNIQUE (iso3_code)
+);
+
+-- Listas simples (código + valor) agrupadas por tema:
+-- document_extension, marital_status, occupation, economic_activity, income_range, city...
+CREATE TABLE core.catalogs (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    topic       text COLLATE core.ci_ai NOT NULL,
+    code        text COLLATE core.ci_ai NOT NULL,
+    value       text COLLATE core.ci_ai NOT NULL,
+    sort_order  int  NOT NULL DEFAULT 0,
+    is_active   boolean NOT NULL DEFAULT true,
+    created_by  text NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_by  text,
+    updated_at  timestamptz,
+    CONSTRAINT catalogs_topic_code_uk UNIQUE (topic, code)
+);
+
+CREATE TABLE core.relationships (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code        text NOT NULL,                       -- SPOUSE, CHILD, FATHER...
+    name        text COLLATE core.ci_ai NOT NULL,
+    is_unique   boolean NOT NULL,                    -- solo uno por contrato (ej. cónyuge)
+    pep_degree  smallint,                            -- grado de parentesco, para familiares PEP
+    is_active   boolean NOT NULL DEFAULT true,
+    created_by  text NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_by  text,
+    updated_at  timestamptz,
+    CONSTRAINT relationships_code_uk UNIQUE (code)
+);
+
+-- Una persona por documento, con sus datos ACTUALES.
+-- Asegurado, contratante y agente son ROLES (sales.contract_parties, core.agents),
+-- no tipos de persona. La copia de los datos con que se firmó cada contrato
+-- vive en sales.contract_parties.
+CREATE TABLE core.people (
+    id                    uuid PRIMARY KEY DEFAULT uuidv7(),
+    document_type         text NOT NULL CHECK (document_type IN ('CI', 'CE')),
+    document_number       bytea NOT NULL,
+    document_complement   bytea,
+    document_extension    text,                         -- catalogs.document_extension (null para CE)
+    document_hash         bytea NOT NULL,               -- HMAC(tipo|número|complemento)
+    names                 bytea NOT NULL,
+    paternal_lastname     bytea,
+    maternal_lastname     bytea,
+    birthdate             bytea NOT NULL,
+    gender                text NOT NULL CHECK (gender IN ('Male', 'Female')),
+    nationality_id        smallint NOT NULL REFERENCES core.countries (id),
+    address               bytea,
+    cellphone             bytea,
+    email                 bytea,
+    city                  text,                         -- catalogs.city
+    marital_status        text,                         -- catalogs.marital_status
+    occupation            text,                         -- catalogs.occupation
+    economic_activity     text,                         -- catalogs.economic_activity
+    monthly_income_range  text,                         -- catalogs.income_range
+    is_active             boolean NOT NULL DEFAULT true,
+    created_by            text NOT NULL,
+    created_at            timestamptz NOT NULL DEFAULT now(),
+    updated_by            text,
+    updated_at            timestamptz,
+    CONSTRAINT people_document_hash_uk UNIQUE (document_hash),
+    CONSTRAINT people_names_required CHECK (paternal_lastname IS NOT NULL OR maternal_lastname IS NOT NULL)
+);
+
+-- Agencias de corredores (brokers)
+CREATE TABLE core.agencies (
+    id              uuid PRIMARY KEY DEFAULT uuidv7(),
+    code            text NOT NULL,
+    name            text COLLATE core.ci_ai NOT NULL,
+    license_number  text,                             -- registro en la APS
+    email           text,
+    phone           text,
+    is_active       boolean NOT NULL DEFAULT true,
+    created_by      text NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_by      text,
+    updated_at      timestamptz,
+    CONSTRAINT agencies_code_uk UNIQUE (code)
+);
+
+-- Una persona que vende para una agencia. La misma persona puede ser agente
+-- de una agencia y, en otro contrato, asegurado o contratante.
+CREATE TABLE core.agents (
+    id              uuid PRIMARY KEY DEFAULT uuidv7(),
+    agency_id       uuid NOT NULL REFERENCES core.agencies (id),
+    person_id       uuid NOT NULL REFERENCES core.people (id),
+    code            text NOT NULL,                    -- código de agente que va en la póliza
+    license_number  text,                             -- credencial APS del agente
+    valid_from      date NOT NULL,
+    valid_to        date,                             -- null = vigente
+    is_active       boolean NOT NULL DEFAULT true,
+    created_by      text NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_by      text,
+    updated_at      timestamptz,
+    CONSTRAINT agents_code_uk UNIQUE (code),
+    CONSTRAINT agents_agency_person_uk UNIQUE (agency_id, person_id),
+    CONSTRAINT agents_period_ck CHECK (valid_to IS NULL OR valid_to >= valid_from)
+);
+
+-- Empresas clientes que negocian convenios corporativos desde el backoffice
+CREATE TABLE core.companies (
+    id              uuid PRIMARY KEY DEFAULT uuidv7(),
+    tax_id          text NOT NULL,                    -- NIT
+    name            text COLLATE core.ci_ai NOT NULL, -- razón social
+    contact_name    text,
+    contact_email   text,
+    contact_phone   text,
+    is_active       boolean NOT NULL DEFAULT true,
+    created_by      text NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_by      text,
+    updated_at      timestamptz,
+    CONSTRAINT companies_tax_id_uk UNIQUE (tax_id)
+);
+
+-- Lista blanca aprobada por Cumplimiento: exceptúa a una persona de un proveedor
+-- (ej. deuda antigua en Archivo Negativo) durante un periodo.
+CREATE TABLE core.screening_exceptions (
+    id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    person_id       uuid NOT NULL REFERENCES core.people (id),
+    provider        text NOT NULL CHECK (provider IN ('Amlc', 'NegativeFile')),
+    reason          text NOT NULL,
+    approved_by     text NOT NULL,
+    valid_from      date NOT NULL,
+    valid_until     date NOT NULL,
+    is_active       boolean NOT NULL DEFAULT true,
+    created_by      text NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_by      text,
+    updated_at      timestamptz,
+    CONSTRAINT screening_exceptions_period_ck CHECK (valid_until >= valid_from)
+);
+
+CREATE INDEX screening_exceptions_lookup_idx
+    ON core.screening_exceptions (person_id, provider) WHERE is_active;
+
+-- =====================================================================
+-- offer (catálogo comercial)
+-- =====================================================================
+
+CREATE TABLE offer.products (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code        text NOT NULL CHECK (length(code) <= 10),   -- TDS
+    name        text COLLATE core.ci_ai NOT NULL,
+    description text COLLATE core.ci_ai,
+    is_active   boolean NOT NULL DEFAULT true,
+    created_by  text NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_by  text,
+    updated_at  timestamptz,
+    CONSTRAINT products_code_uk UNIQUE (code)
+);
+
+CREATE TABLE offer.plans (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    product_id  bigint NOT NULL REFERENCES offer.products (id),
+    code        text NOT NULL CHECK (length(code) <= 20),   -- TDS-MEN
+    name        text COLLATE core.ci_ai NOT NULL,
+    description text COLLATE core.ci_ai,
+    is_active   boolean NOT NULL DEFAULT true,
+    created_by  text NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_by  text,
+    updated_at  timestamptz,
+    CONSTRAINT plans_code_uk UNIQUE (code)
+);
+
+-- ---------------------------------------------------------------------
+-- Reglas de negocio configurables por plan
+--   parameter_definitions = el DICCIONARIO: qué reglas existen y de qué tipo son.
+--   plan_parameters       = el VALOR de cada regla en cada plan, con vigencia.
+--   El backend arma un objeto tipado PlanRules (MinAge, MaxAge, IsRenewable...)
+--   con las filas vigentes a una fecha. Agregar una regla = insertar filas.
+-- ---------------------------------------------------------------------
+CREATE TABLE offer.parameter_definitions (
+    id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code         text NOT NULL,                       -- MAX_AGE, IS_RENEWABLE...
+    name         text COLLATE core.ci_ai NOT NULL,
+    description  text COLLATE core.ci_ai,
+    data_type    text NOT NULL CHECK (data_type IN ('Text', 'Integer', 'Decimal', 'Boolean', 'Date')),
+    is_required  boolean NOT NULL DEFAULT false,      -- un plan vendible debe tenerla
+    is_active    boolean NOT NULL DEFAULT true,
+    created_by   text NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    updated_by   text,
+    updated_at   timestamptz,
+    CONSTRAINT parameter_definitions_code_uk UNIQUE (code)
+);
+
+CREATE TABLE offer.plan_parameters (
+    id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    plan_id        bigint NOT NULL REFERENCES offer.plans (id),
+    definition_id  bigint NOT NULL REFERENCES offer.parameter_definitions (id),
+    value          text NOT NULL,
+    valid_from     date NOT NULL,
+    valid_to       date,                               -- null = vigente sin fin
+    is_active      boolean NOT NULL DEFAULT true,
+    created_by     text NOT NULL,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    updated_by     text,
+    updated_at     timestamptz,
+    CONSTRAINT plan_parameters_period_ck CHECK (valid_to IS NULL OR valid_to >= valid_from)
+);
+
+CREATE INDEX plan_parameters_lookup_idx ON offer.plan_parameters (plan_id, definition_id, valid_from) WHERE is_active;
+
+-- Datos propios de cada producto que se piden al contratar
+--   (viajes: origen y destino; celulares: marca, IMEI...). Valores en sales.contract_details.
+CREATE TABLE offer.contract_field_definitions (
+    id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    product_id     bigint NOT NULL REFERENCES offer.products (id),
+    code           text NOT NULL,                      -- ORIGIN, DESTINATION, DEVICE_IMEI...
+    label          text COLLATE core.ci_ai NOT NULL,   -- texto que muestra la web
+    data_type      text NOT NULL CHECK (data_type IN ('Text', 'Integer', 'Decimal', 'Boolean', 'Date', 'Option')),
+    catalog_topic  text,                               -- si es Option: topic de core.catalogs ('country' = core.countries)
+    is_required    boolean NOT NULL DEFAULT true,
+    max_length     int,
+    sort_order     int NOT NULL DEFAULT 0,
+    is_active      boolean NOT NULL DEFAULT true,
+    created_by     text NOT NULL,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    updated_by     text,
+    updated_at     timestamptz,
+    CONSTRAINT contract_field_definitions_uk UNIQUE (product_id, code),
+    CONSTRAINT contract_field_definitions_option_ck CHECK (data_type <> 'Option' OR catalog_topic IS NOT NULL)
+);
+
+-- Convenio corporativo: condiciones negociadas en el backoffice con una empresa
+-- (prima y días de cobertura) a cambio de un cupo de personas que contratarán el plan.
+-- Draft → Active (aprobado por otra persona) → Closed. Los empleados contratan con el código.
+CREATE TABLE offer.agreements (
+    id               uuid PRIMARY KEY DEFAULT uuidv7(),
+    code             text NOT NULL CHECK (length(code) <= 30),   -- ACME-TDS-2026
+    company_id       uuid NOT NULL REFERENCES core.companies (id),
+    plan_id          bigint NOT NULL REFERENCES offer.plans (id),
+    premium_amount   numeric(12,2) NOT NULL CHECK (premium_amount > 0),
+    currency         text NOT NULL CHECK (currency IN ('BOB', 'USD')),
+    coverage_days    int NOT NULL CHECK (coverage_days > 0),
+    quota            int NOT NULL CHECK (quota > 0),               -- personas comprometidas
+    valid_from       date NOT NULL,
+    valid_to         date NOT NULL,
+    status           text NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft', 'Active', 'Closed')),
+    negotiated_by    text NOT NULL,
+    approved_by      text,
+    approved_at      timestamptz,
+    notes            text,
+    is_active        boolean NOT NULL DEFAULT true,
+    created_by       text NOT NULL,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_by       text,
+    updated_at       timestamptz,
+    CONSTRAINT agreements_code_uk UNIQUE (code),
+    CONSTRAINT agreements_period_ck CHECK (valid_to >= valid_from),
+    CONSTRAINT agreements_approval_ck CHECK (status = 'Draft' OR (approved_by IS NOT NULL AND approved_at IS NOT NULL)),
+    CONSTRAINT agreements_four_eyes_ck CHECK (approved_by IS NULL OR approved_by <> negotiated_by)
+);
+
+-- REGLA: coberturas, asistencias y exclusiones ya vendidas no se modifican;
+-- un cambio = filas nuevas y desactivar las anteriores (is_active = false).
+CREATE TABLE offer.coverages (
+    id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    plan_id         bigint NOT NULL REFERENCES offer.plans (id),
+    name            text COLLATE core.ci_ai NOT NULL,
+    type            text NOT NULL CHECK (type IN ('Main', 'Additional')),
+    insured_amount  numeric(12,2),
+    currency        text CHECK (currency IN ('BOB', 'USD')),
+    description     text COLLATE core.ci_ai NOT NULL,
+    sort_order      int NOT NULL DEFAULT 0,
+    is_active       boolean NOT NULL DEFAULT true,
+    created_by      text NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_by      text,
+    updated_at      timestamptz
+);
+
+CREATE TABLE offer.assistances (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    plan_id     bigint NOT NULL REFERENCES offer.plans (id),
+    name        text COLLATE core.ci_ai NOT NULL,
+    service     text COLLATE core.ci_ai NOT NULL,
+    description text COLLATE core.ci_ai NOT NULL,
+    sort_order  int NOT NULL DEFAULT 0,
+    is_active   boolean NOT NULL DEFAULT true,
+    created_by  text NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_by  text,
+    updated_at  timestamptz
+);
+
+CREATE TABLE offer.exclusions (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    plan_id     bigint NOT NULL REFERENCES offer.plans (id),
+    description text COLLATE core.ci_ai NOT NULL,
+    sort_order  int NOT NULL DEFAULT 0,
+    is_active   boolean NOT NULL DEFAULT true,
+    created_by  text NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_by  text,
+    updated_at  timestamptz
+);
+
+CREATE TABLE offer.faqs (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    product_id  bigint NOT NULL REFERENCES offer.products (id),
+    question    text COLLATE core.ci_ai NOT NULL,
+    answer      text COLLATE core.ci_ai NOT NULL,
+    sort_order  int NOT NULL DEFAULT 0,
+    is_active   boolean NOT NULL DEFAULT true,
+    created_by  text NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_by  text,
+    updated_at  timestamptz
+);
+
+-- =====================================================================
+-- compliance (declaraciones PEP; las validaciones van después de sales.contracts)
+-- =====================================================================
+
+-- Historial de declaraciones PEP de una persona. La vigente es la de
+-- superseded_at null; cada parte del contrato apunta a la que regía al contratar.
+CREATE TABLE compliance.pep_declarations (
+    id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    person_id       uuid NOT NULL REFERENCES core.people (id),
+    is_pep          boolean NOT NULL,
+    position        text,
+    institution     text,
+    period_start    date,
+    period_end      date,
+    declared_at     timestamptz NOT NULL DEFAULT now(),
+    superseded_at   timestamptz,                       -- se llena cuando la reemplaza otra
+    is_active       boolean NOT NULL DEFAULT true,
+    created_by      text NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_by      text,
+    updated_at      timestamptz,
+    CONSTRAINT pep_declarations_data_ck CHECK (NOT is_pep OR (position IS NOT NULL AND institution IS NOT NULL))
+);
+
+-- Solo una declaración vigente por persona
+CREATE UNIQUE INDEX pep_declarations_current_uk
+    ON compliance.pep_declarations (person_id) WHERE superseded_at IS NULL;
+
+-- Al menos un familiar si is_pep (se valida en el Domain)
+CREATE TABLE compliance.pep_relatives (
+    id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pep_declaration_id  bigint NOT NULL REFERENCES compliance.pep_declarations (id),
+    relationship_id     bigint NOT NULL REFERENCES core.relationships (id),
+    names               bytea NOT NULL,
+    paternal_lastname   bytea,
+    maternal_lastname   bytea,
+    document_number     bytea,
+    is_active           boolean NOT NULL DEFAULT true,
+    created_by          text NOT NULL,
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    updated_by          text,
+    updated_at          timestamptz
+);
+
+CREATE TABLE compliance.pep_partners (
+    id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    pep_declaration_id  bigint NOT NULL REFERENCES compliance.pep_declarations (id),
+    names               bytea NOT NULL,
+    paternal_lastname   bytea,
+    maternal_lastname   bytea,
+    document_number     bytea,
+    company_name        text,
+    is_active           boolean NOT NULL DEFAULT true,
+    created_by          text NOT NULL,
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    updated_by          text,
+    updated_at          timestamptz
+);
+
+-- =====================================================================
+-- sales (el contrato con el cliente)
+-- =====================================================================
+
+-- El contrato nace al iniciar la compra y se vuelve póliza vigente al pagarse el QR.
+-- number, coverage_from y coverage_to se asignan en ese instante.
+CREATE TABLE sales.contracts (
+    id                uuid PRIMARY KEY DEFAULT uuidv7(),
+    number            text,                            -- TDS-2026-7K4QM92X (generado al pagar)
+    plan_id           bigint NOT NULL REFERENCES offer.plans (id),
+    status            text NOT NULL DEFAULT 'Started' CHECK (status IN
+                        ('Started', 'Validated', 'Rejected', 'Declared', 'Verified',
+                         'PendingPayment', 'Active', 'Expired', 'Cancelled', 'Abandoned')),
+    rejection_reason  text,
+    agreement_id      uuid REFERENCES offer.agreements (id),   -- convenio corporativo (opcional)
+    premium_amount    numeric(12,2) NOT NULL,          -- congelada al iniciar (PlanRules o convenio)
+    currency          text NOT NULL CHECK (currency IN ('BOB', 'USD')),
+    coverage_days     int NOT NULL CHECK (coverage_days > 0),   -- congelados al iniciar
+    coverage_from     timestamptz,                     -- instante del pago (sin carencia)
+    coverage_to       timestamptz,                     -- coverage_from + coverage_days
+    channel           text NOT NULL DEFAULT 'Web' CHECK (channel IN ('Web', 'Broker')),
+    client_ip         inet,
+    is_active         boolean NOT NULL DEFAULT true,
+    created_by        text NOT NULL,
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    updated_by        text,
+    updated_at        timestamptz,
+    CONSTRAINT contracts_number_uk UNIQUE (number),
+    CONSTRAINT contracts_rejection_ck CHECK (status <> 'Rejected' OR rejection_reason IS NOT NULL),
+    CONSTRAINT contracts_issued_ck CHECK (status NOT IN ('Active', 'Expired', 'Cancelled')
+                                          OR (number IS NOT NULL AND coverage_from IS NOT NULL AND coverage_to IS NOT NULL)),
+    CONSTRAINT contracts_period_ck CHECK (coverage_to IS NULL OR coverage_to > coverage_from)
+);
+
+CREATE INDEX contracts_status_idx ON sales.contracts (status, updated_at);   -- job de abandonados y vencidos
+CREATE INDEX contracts_agreement_idx ON sales.contracts (agreement_id) WHERE agreement_id IS NOT NULL;   -- cupo del convenio
+
+-- Asegurado, contratante y agente de un contrato, con la copia (snapshot) de sus datos
+-- al contratar. Si la persona contrata para sí misma, hay dos filas con el mismo person_id.
+CREATE TABLE sales.contract_parties (
+    id                    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    contract_id           uuid NOT NULL REFERENCES sales.contracts (id),
+    person_id             uuid NOT NULL REFERENCES core.people (id),
+    role                  text NOT NULL CHECK (role IN ('Contractor', 'Insured', 'Agent')),
+    agent_id              uuid REFERENCES core.agents (id),                    -- solo para el rol Agent
+    pep_declaration_id    bigint REFERENCES compliance.pep_declarations (id),  -- la vigente al contratar
+    -- snapshot (cifrado)
+    document_number       bytea NOT NULL,
+    document_complement   bytea,
+    document_extension    text,
+    names                 bytea NOT NULL,
+    paternal_lastname     bytea,
+    maternal_lastname     bytea,
+    birthdate             bytea,
+    address               bytea,
+    cellphone             bytea,
+    email                 bytea,
+    -- snapshot (no sensible)
+    gender                text,
+    nationality_id        smallint REFERENCES core.countries (id),
+    city                  text,
+    marital_status        text,
+    occupation            text,
+    economic_activity     text,
+    monthly_income_range  text,
+    is_active             boolean NOT NULL DEFAULT true,
+    created_by            text NOT NULL,
+    created_at            timestamptz NOT NULL DEFAULT now(),
+    updated_by            text,
+    updated_at            timestamptz,
+    CONSTRAINT contract_parties_role_uk UNIQUE (contract_id, role),
+    CONSTRAINT contract_parties_agent_ck CHECK ((role = 'Agent') = (agent_id IS NOT NULL)),
+    CONSTRAINT contract_parties_customer_ck CHECK (role = 'Agent'
+        OR (birthdate IS NOT NULL AND gender IS NOT NULL AND nationality_id IS NOT NULL)),
+    CONSTRAINT contract_parties_pep_ck CHECK (role <> 'Agent' OR pep_declaration_id IS NULL)
+);
+
+-- EligibilityPolicy: contratos vigentes del asegurado que se solapan
+CREATE INDEX contract_parties_insured_idx ON sales.contract_parties (person_id) WHERE role = 'Insured';
+CREATE INDEX contract_parties_contract_idx ON sales.contract_parties (contract_id);
+
+-- Valores de los campos propios del producto (ver offer.contract_field_definitions)
+CREATE TABLE sales.contract_details (
+    id                   bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    contract_id          uuid NOT NULL REFERENCES sales.contracts (id),
+    field_definition_id  bigint NOT NULL REFERENCES offer.contract_field_definitions (id),
+    value                text NOT NULL,
+    is_active            boolean NOT NULL DEFAULT true,
+    created_by           text NOT NULL,
+    created_at           timestamptz NOT NULL DEFAULT now(),
+    updated_by           text,
+    updated_at           timestamptz,
+    CONSTRAINT contract_details_field_uk UNIQUE (contract_id, field_definition_id)
+);
+
+-- Sin filas = herederos legales (también obligatorio si el asegurado es menor).
+-- La suma de 100 % y el máximo por plan se validan en el Domain.
+CREATE TABLE sales.beneficiaries (
+    id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    contract_id         uuid NOT NULL REFERENCES sales.contracts (id),
+    relationship_id     bigint NOT NULL REFERENCES core.relationships (id),
+    document_number     bytea,
+    names               bytea NOT NULL,
+    paternal_lastname   bytea,
+    maternal_lastname   bytea,
+    percentage          numeric(5,2) NOT NULL CHECK (percentage > 0 AND percentage <= 100),
+    is_active           boolean NOT NULL DEFAULT true,
+    created_by          text NOT NULL,
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    updated_by          text,
+    updated_at          timestamptz
+);
+
+CREATE TABLE sales.otp_challenges (
+    id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    contract_id     uuid NOT NULL REFERENCES sales.contracts (id),
+    channel         text NOT NULL CHECK (channel IN ('Sms', 'WhatsApp', 'Email')),
+    destination     bytea NOT NULL,
+    code_hash       bytea NOT NULL,
+    expires_at      timestamptz NOT NULL,
+    attempts        smallint NOT NULL DEFAULT 0,
+    max_attempts    smallint NOT NULL DEFAULT 3,
+    verified_at     timestamptz,
+    is_active       boolean NOT NULL DEFAULT true,
+    created_by      text NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_by      text,
+    updated_at      timestamptz
+);
+
+CREATE INDEX otp_challenges_contract_idx ON sales.otp_challenges (contract_id, created_at DESC);
+
+-- Consentimiento expreso (APS): qué documento, en qué versión y con qué texto exacto
+-- aceptó quién, desde dónde y firmado con qué OTP. Los textos viven en el sistema de
+-- documentación; aquí queda la prueba.
+CREATE TABLE sales.consents (
+    id                 bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    contract_id        uuid NOT NULL REFERENCES sales.contracts (id),
+    contract_party_id  bigint NOT NULL REFERENCES sales.contract_parties (id),   -- quien acepta (el contratante)
+    otp_challenge_id   bigint REFERENCES sales.otp_challenges (id),              -- OTP con que se firmó
+    document_type      text NOT NULL CHECK (document_type IN
+                         ('GeneralConditions', 'ParticularConditions', 'DataPrivacy', 'PepStatement', 'BeneficiaryStatement')),
+    document_code      text NOT NULL,                  -- código en el sistema de documentación
+    document_version   text NOT NULL,                  -- 2.1
+    content_hash       bytea NOT NULL,                 -- SHA-256 del texto mostrado
+    accepted_at        timestamptz NOT NULL DEFAULT now(),
+    ip_address         inet NOT NULL,
+    user_agent         text,
+    is_active          boolean NOT NULL DEFAULT true,
+    created_by         text NOT NULL,
+    created_at         timestamptz NOT NULL DEFAULT now(),
+    updated_by         text,
+    updated_at         timestamptz,
+    CONSTRAINT consents_document_uk UNIQUE (contract_id, document_type)
+);
+
+CREATE TABLE sales.qr_payments (
+    id                    uuid PRIMARY KEY DEFAULT uuidv7(),
+    contract_id           uuid NOT NULL REFERENCES sales.contracts (id),
+    amount                numeric(12,2) NOT NULL,
+    currency              text NOT NULL CHECK (currency IN ('BOB', 'USD')),
+    bank_transaction_id   text,
+    qr_image              text,                       -- base64 devuelto por el Banco
+    is_single_use         boolean NOT NULL DEFAULT true,
+    expires_at            timestamptz NOT NULL,       -- 30 min por defecto (configurable)
+    status                text NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'Paid', 'Expired', 'Replaced')),
+    paid_at               timestamptz,
+    confirmed_manually_by text,                       -- conciliación manual
+    manual_reason         text,
+    is_active             boolean NOT NULL DEFAULT true,
+    created_by            text NOT NULL,
+    created_at            timestamptz NOT NULL DEFAULT now(),
+    updated_by            text,
+    updated_at            timestamptz,
+    CONSTRAINT qr_payments_bank_tx_uk UNIQUE (bank_transaction_id)
+);
+
+-- Nunca dos QR vigentes para el mismo contrato
+CREATE UNIQUE INDEX qr_payments_one_pending_uk ON sales.qr_payments (contract_id) WHERE status = 'Pending';
+
+-- Cada aviso del Banco tal como llegó (idempotencia y evidencia para conciliar)
+CREATE TABLE sales.payment_notifications (
+    id                    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    qr_payment_id         uuid REFERENCES sales.qr_payments (id),   -- null si no se reconoce
+    bank_transaction_id   text NOT NULL,
+    raw_payload           jsonb NOT NULL,
+    received_at           timestamptz NOT NULL DEFAULT now(),
+    result                text NOT NULL CHECK (result IN ('Applied', 'Duplicate', 'Expired', 'AmountMismatch', 'Unknown')),
+    created_by            text NOT NULL,
+    created_at            timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX payment_notifications_tx_idx ON sales.payment_notifications (bank_transaction_id);
+
+-- Bitácora del contrato y, a la vez, outbox hacia Azure Service Bus.
+--   * Sin cola (queue null): solo se registra (status Recorded). Ej.: PaymentConfirmed.
+--   * Con cola: el publicador toma los Pending, los envía y los marca Published;
+--     el consumidor (DocumentEngine, correo) confirma con Completed o Failed.
+CREATE TABLE sales.contract_events (
+    id               uuid PRIMARY KEY DEFAULT uuidv7(),
+    contract_id      uuid NOT NULL REFERENCES sales.contracts (id),
+    type             text NOT NULL CHECK (type IN
+                       ('ContractStarted', 'ScreeningCompleted', 'ContractRejected', 'OtpVerified',
+                        'QrGenerated', 'PaymentConfirmed', 'WelcomeEmail', 'ClientFolder', 'ContractExpired')),
+    queue            text CHECK (queue IN ('policy-welcome-email', 'client-folder')),
+    payload          jsonb NOT NULL DEFAULT '{}',
+    status           text NOT NULL CHECK (status IN ('Recorded', 'Pending', 'Published', 'Completed', 'Failed')),
+    attempts         smallint NOT NULL DEFAULT 0,
+    next_attempt_at  timestamptz,
+    published_at     timestamptz,
+    completed_at     timestamptz,
+    last_error       text,
+    created_by       text NOT NULL,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_by       text,
+    updated_at       timestamptz,
+    CONSTRAINT contract_events_queue_ck CHECK ((queue IS NULL) = (status = 'Recorded'))
+);
+
+CREATE INDEX contract_events_contract_idx ON sales.contract_events (contract_id, created_at);
+CREATE INDEX contract_events_pending_idx  ON sales.contract_events (next_attempt_at) WHERE status = 'Pending';
+
+-- =====================================================================
+-- compliance (validaciones y lecturas del carnet)
+-- =====================================================================
+
+-- Una fila por consulta a SEGIP, AMLC o Archivo Negativo de una persona,
+-- siempre dentro de un contrato (cada contrato exige sus propias validaciones).
+CREATE TABLE compliance.screenings (
+    id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    person_id       uuid NOT NULL REFERENCES core.people (id),
+    contract_id     uuid NOT NULL REFERENCES sales.contracts (id),
+    provider        text NOT NULL CHECK (provider IN ('Segip', 'Amlc', 'NegativeFile')),
+    is_clear        boolean NOT NULL,           -- SEGIP: todo coincide; AMLC/AN: no aparece
+    detail          jsonb,                      -- SEGIP: coincidencia por campo
+    raw_response    jsonb NOT NULL,             -- evidencia íntegra
+    exception_id    bigint REFERENCES core.screening_exceptions (id),   -- lista blanca aplicada
+    requested_at    timestamptz NOT NULL,
+    responded_at    timestamptz NOT NULL,
+    created_by      text NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX screenings_contract_idx ON compliance.screenings (contract_id, person_id, provider);
+CREATE INDEX screenings_person_idx   ON compliance.screenings (person_id, requested_at DESC);
+
+-- Apariciones devueltas por AMLC (listas internacionales) o Archivo Negativo
+CREATE TABLE compliance.screening_items (
+    id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    screening_id  bigint NOT NULL REFERENCES compliance.screenings (id),
+    found_in      text NOT NULL,
+    code          text,
+    position      text,
+    entity        text,
+    year          text,
+    observation   text,
+    created_by    text NOT NULL,
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+-- Lectura OCR del carnet con LlamitAI (anverso y reverso). Se hace antes de iniciar
+-- el contrato para precargar el formulario; al iniciarlo se vincula a la persona y al contrato.
+CREATE TABLE compliance.identity_readings (
+    id                uuid PRIMARY KEY DEFAULT uuidv7(),
+    person_id         uuid REFERENCES core.people (id),        -- null hasta identificar a la persona
+    contract_id       uuid REFERENCES sales.contracts (id),    -- null hasta iniciar el contrato
+    provider          text NOT NULL DEFAULT 'LlamitAI',
+    front_image_path  text NOT NULL,              -- Blob privado: anverso
+    back_image_path   text NOT NULL,              -- Blob privado: reverso
+    status            text NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'Completed', 'Failed')),
+    extracted_text    bytea,                      -- texto procesado por LlamitAI (cifrado)
+    extracted_fields  bytea,                      -- campos reconocidos en JSON (cifrado)
+    raw_response      bytea,                      -- respuesta íntegra del servicio (cifrada)
+    matches_declared  boolean,                    -- comparación con los datos declarados
+    differences       jsonb,                      -- nombres de los campos que difieren (sin valores)
+    failure_reason    text,
+    client_ip         inet,
+    requested_at      timestamptz NOT NULL DEFAULT now(),
+    responded_at      timestamptz,
+    is_active         boolean NOT NULL DEFAULT true,
+    created_by        text NOT NULL,
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    updated_by        text,
+    updated_at        timestamptz,
+    CONSTRAINT identity_readings_result_ck CHECK (status <> 'Completed' OR extracted_text IS NOT NULL)
+);
+
+CREATE INDEX identity_readings_person_idx ON compliance.identity_readings (person_id);
+
+-- =====================================================================
+-- feedback
+-- =====================================================================
+
+CREATE TABLE feedback.survey_responses (
+    id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    contract_id     uuid NOT NULL REFERENCES sales.contracts (id),
+    type            text NOT NULL CHECK (type IN ('ConditionsComprehension', 'PurchaseEase')),
+    score           smallint NOT NULL,
+    comment         text,
+    created_by      text NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT survey_responses_type_uk UNIQUE (contract_id, type),
+    CONSTRAINT survey_responses_score_ck CHECK (
+        (type = 'ConditionsComprehension' AND score BETWEEN 1 AND 5) OR
+        (type = 'PurchaseEase'            AND score BETWEEN 1 AND 10))
+);
+
+-- =====================================================================
+-- Datos iniciales
+-- =====================================================================
+
+INSERT INTO core.countries (iso_code, iso3_code, name, nationality, sort_order, created_by) VALUES
+    ('BO', 'BOL', 'Bolivia',        'Boliviana',      1, 'seed'),
+    ('AR', 'ARG', 'Argentina',      'Argentina',      2, 'seed'),
+    ('BR', 'BRA', 'Brasil',         'Brasileña',      3, 'seed'),
+    ('CL', 'CHL', 'Chile',          'Chilena',        4, 'seed'),
+    ('PE', 'PER', 'Perú',           'Peruana',        5, 'seed'),
+    ('PY', 'PRY', 'Paraguay',       'Paraguaya',      6, 'seed'),
+    ('CO', 'COL', 'Colombia',       'Colombiana',     7, 'seed'),
+    ('VE', 'VEN', 'Venezuela',      'Venezolana',     8, 'seed'),
+    ('ES', 'ESP', 'España',         'Española',       9, 'seed'),
+    ('US', 'USA', 'Estados Unidos', 'Estadounidense', 10, 'seed');
+
+INSERT INTO core.catalogs (topic, code, value, sort_order, created_by) VALUES
+    ('document_extension', 'LP', 'La Paz', 1, 'seed'),
+    ('document_extension', 'CB', 'Cochabamba', 2, 'seed'),
+    ('document_extension', 'SC', 'Santa Cruz', 3, 'seed'),
+    ('document_extension', 'OR', 'Oruro', 4, 'seed'),
+    ('document_extension', 'PT', 'Potosí', 5, 'seed'),
+    ('document_extension', 'CH', 'Chuquisaca', 6, 'seed'),
+    ('document_extension', 'TJ', 'Tarija', 7, 'seed'),
+    ('document_extension', 'BE', 'Beni', 8, 'seed'),
+    ('document_extension', 'PD', 'Pando', 9, 'seed'),
+    ('marital_status', 'SINGLE',     'Soltero(a)', 1, 'seed'),
+    ('marital_status', 'MARRIED',    'Casado(a)', 2, 'seed'),
+    ('marital_status', 'DIVORCED',   'Divorciado(a)', 3, 'seed'),
+    ('marital_status', 'WIDOWED',    'Viudo(a)', 4, 'seed'),
+    ('marital_status', 'COHABITING', 'Unión libre', 5, 'seed');
+
+INSERT INTO core.relationships (code, name, is_unique, pep_degree, created_by) VALUES
+    ('SPOUSE',         'Cónyuge',       true,  1,    'seed'),
+    ('CHILD',          'Hijo(a)',       false, 1,    'seed'),
+    ('FATHER',         'Padre',         true,  1,    'seed'),
+    ('MOTHER',         'Madre',         true,  1,    'seed'),
+    ('SIBLING',        'Hermano(a)',    false, 2,    'seed'),
+    ('GRANDPARENT',    'Abuelo(a)',     false, 2,    'seed'),
+    ('GRANDCHILD',     'Nieto(a)',      false, 2,    'seed'),
+    ('PARENT_IN_LAW',  'Suegro(a)',     false, 1,    'seed'),
+    ('CHILD_IN_LAW',   'Yerno / Nuera', false, 1,    'seed'),
+    ('SIBLING_IN_LAW', 'Cuñado(a)',     false, 2,    'seed'),
+    ('OTHER',          'Otro',          false, NULL, 'seed');
+
+INSERT INTO offer.products (code, name, description, created_by)
+VALUES ('TDS', 'Tu Deporte Seguro', 'Seguro de accidentes para deportes.', 'seed');
+
+INSERT INTO offer.plans (product_id, code, name, description, created_by)
+SELECT p.id, v.code, v.name, v.description, 'seed'
+FROM offer.products p,
+     (VALUES ('TDS-DIA', 'Diario',    '1 día de vigencia.'),
+             ('TDS-MEN', 'Mensual',   '30 días de vigencia.'),
+             ('TDS-SEM', 'Semestral', '180 días de vigencia.'),
+             ('TDS-ANU', 'Anual',     '365 días de vigencia.')) AS v(code, name, description)
+WHERE p.code = 'TDS';
+
+-- Diccionario de reglas
+INSERT INTO offer.parameter_definitions (code, name, description, data_type, is_required, created_by) VALUES
+    ('DURATION_DAYS',       'Días de vigencia',          'Días desde el pago hasta el fin de la cobertura', 'Integer', true,  'seed'),
+    ('PREMIUM_AMOUNT',      'Prima',                     'Monto que paga el cliente',                       'Decimal', true,  'seed'),
+    ('PREMIUM_CURRENCY',    'Moneda de la prima',        'BOB o USD',                                       'Text',    true,  'seed'),
+    ('MIN_AGE',             'Edad mínima de afiliación', 'Años cumplidos al contratar',                     'Integer', true,  'seed'),
+    ('MAX_AGE',             'Edad máxima de afiliación', 'Años cumplidos al contratar',                     'Integer', true,  'seed'),
+    ('MAX_BENEFICIARIES',   'Máximo de beneficiarios',   '0 = solo herederos legales',                      'Integer', true,  'seed'),
+    ('IS_RENEWABLE',        'Renovable',                 'Permite renovación',                              'Boolean', true,  'seed'),
+    ('BROKER_SALE_ENABLED', 'Venta por brokers',         'Habilitado para agencias de brokers',             'Boolean', true,  'seed'),
+    ('QR_LIFETIME_MINUTES', 'Vida del QR',               'Minutos antes de que el QR venza',                'Integer', true,  'seed'),
+    ('NET_PREMIUM_RATE',    'Tasa de prima neta',        'Porcentaje de la prima',                          'Decimal', false, 'seed'),
+    ('CEDED_PREMIUM_RATE',  'Tasa de prima cedida',      'Porcentaje cedido al reasegurador',               'Decimal', false, 'seed');
+
+-- Reglas comunes, repetidas en cada plan (cada plan tiene su propio conjunto)
+INSERT INTO offer.plan_parameters (plan_id, definition_id, value, valid_from, created_by)
+SELECT pl.id, d.id, v.value, DATE '2026-01-01', 'seed'
+FROM offer.plans pl
+JOIN (VALUES ('PREMIUM_CURRENCY', 'BOB'), ('MIN_AGE', '3'), ('MAX_AGE', '64'), ('MAX_BENEFICIARIES', '5'),
+             ('IS_RENEWABLE', 'false'), ('BROKER_SALE_ENABLED', 'false'), ('QR_LIFETIME_MINUTES', '30'))
+     AS v(code, value) ON true
+JOIN offer.parameter_definitions d ON d.code = v.code
+WHERE pl.code LIKE 'TDS-%';
+
+-- Reglas propias de cada plan
+INSERT INTO offer.plan_parameters (plan_id, definition_id, value, valid_from, created_by)
+SELECT pl.id, d.id, v.value, DATE '2026-01-01', 'seed'
+FROM (VALUES ('TDS-DIA', 'DURATION_DAYS', '1'), ('TDS-DIA', 'PREMIUM_AMOUNT', '5.00'),
+             ('TDS-MEN', 'DURATION_DAYS', '30'),
+             ('TDS-SEM', 'DURATION_DAYS', '180'),
+             ('TDS-ANU', 'DURATION_DAYS', '365'))
+     AS v(plan_code, code, value)
+JOIN offer.plans pl ON pl.code = v.plan_code
+JOIN offer.parameter_definitions d ON d.code = v.code;
+-- PENDIENTE: PREMIUM_AMOUNT de TDS-MEN, TDS-SEM y TDS-ANU (sin prima, PlanRules los marca como no vendibles)
+
+INSERT INTO offer.coverages (plan_id, name, type, insured_amount, currency, description, sort_order, created_by)
+SELECT pl.id, c.name, 'Main', c.amount, 'BOB', c.description, c.ord, 'seed'
+FROM offer.plans pl
+JOIN (VALUES ('TDS-DIA', 'Gastos médicos',    1400.00, 'Cobertura de gastos médicos por lesión', 1),
+             ('TDS-DIA', 'Muerte accidental', 7000.00, 'Cobertura de gastos por muerte accidental', 2),
+             ('TDS-MEN', 'Gastos médicos',    1800.00, 'Cobertura de gastos médicos por lesión', 1),
+             ('TDS-MEN', 'Muerte accidental', 9000.00, 'Cobertura de gastos por muerte accidental', 2),
+             ('TDS-SEM', 'Gastos médicos',    7000.00, 'Cobertura de gastos médicos por lesión', 1),
+             ('TDS-SEM', 'Muerte accidental', 35000.00, 'Cobertura de gastos por muerte accidental', 2),
+             ('TDS-ANU', 'Gastos médicos',    14000.00, 'Cobertura de gastos médicos por lesión', 1),
+             ('TDS-ANU', 'Muerte accidental', 70000.00, 'Cobertura de gastos por muerte accidental', 2))
+     AS c(plan_code, name, amount, description, ord) ON c.plan_code = pl.code;
+
+INSERT INTO offer.assistances (plan_id, name, service, description, created_by)
+SELECT id, 'SALUD+', 'Servicio de fisioterapia',
+       'Hasta 10 fisioterapias anuales (acorde al plan). Excluye tratamientos con ondas de choque.', 'seed'
+FROM offer.plans WHERE code LIKE 'TDS-%';
+
+-- PENDIENTE: exclusiones y FAQ de Tu Deporte Seguro (textos del condicionado)
+
+-- Ejemplo de campos propios (comentado): un futuro seguro de viajes
+-- INSERT INTO offer.contract_field_definitions (product_id, code, label, data_type, catalog_topic, sort_order, created_by)
+-- VALUES (<id VIAJES>, 'ORIGIN',      'País de origen',  'Option', 'country', 1, 'seed'),
+--        (<id VIAJES>, 'DESTINATION', 'País de destino', 'Option', 'country', 2, 'seed'),
+--        (<id VIAJES>, 'DEPARTURE',   'Fecha de salida', 'Date',   NULL,      3, 'seed');
